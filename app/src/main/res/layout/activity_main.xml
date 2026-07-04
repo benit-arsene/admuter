@@ -11,14 +11,13 @@
         android:id="@+id/statusIcon"
         android:layout_width="64dp"
         android:layout_height="64dp"
-        android:src="@android:drawable/ic_lock_silent_mode_on"
+        android:src="@drawable/ic_mute"
         android:contentDescription="@string/app_name"
         android:alpha="0.6"
         app:layout_constraintBottom_toTopOf="@id/statusText"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVerticalChainStyle="packed" />
+        app:layout_constraintTop_toTopOf="parent" />
 
     <TextView
         android:id="@+id/statusText"

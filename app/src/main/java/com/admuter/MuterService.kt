@@ -255,11 +255,11 @@ class MuterService : LifecycleService() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
+            .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(
-                android.R.drawable.ic_media_pause,
+                R.drawable.ic_stop,
                 "Stop",
                 stopPendingIntent
             )
