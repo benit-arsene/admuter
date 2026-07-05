@@ -9,15 +9,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /**
  * Foreground Service that:
@@ -42,12 +41,32 @@ class MuterService : LifecycleService() {
         /** Intent action to stop this service. */
         const val ACTION_STOP = "com.admuter.ACTION_STOP"
 
+        // Keys for crash diagnostics
+        private const val KEY_LAST_CRASH = "last_crash"
+        private const val KEY_LAST_CRASH_TIME = "last_crash_time"
+
         /**
          * Query whether the service is currently running via persisted state.
          */
         fun isRunning(context: Context): Boolean {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return prefs.getBoolean(KEY_SERVICE_RUNNING, false)
+        }
+
+        /**
+         * Read the last recorded crash info for diagnostics.
+         */
+        fun getLastCrashInfo(context: Context): String? {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            return prefs.getString(KEY_LAST_CRASH, null)
+        }
+
+        /**
+         * Clear crash diagnostics.
+         */
+        fun clearCrashInfo(context: Context) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().remove(KEY_LAST_CRASH).remove(KEY_LAST_CRASH_TIME).apply()
         }
     }
 
@@ -89,24 +108,47 @@ class MuterService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                startForeground(NOTIFICATION_ID, buildNotification(false))
-                registerReceivers()
-                prefs.edit().putBoolean(KEY_SERVICE_RUNNING, true).apply()
-                Log.d(TAG, "Service started — receivers registered")
+                try {
+                    val notification = buildNotification(false)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID, notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                    registerReceivers()
+                    prefs.edit().putBoolean(KEY_SERVICE_RUNNING, true).apply()
+                    Log.d(TAG, "Service started — receivers registered")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Failed to start foreground service: ${t.message}", t)
+                    // Record crash for diagnostics (use commit() to ensure it persists)
+                    val stackTrace = Log.getStackTraceString(t)
+                    prefs.edit()
+                        .putString(KEY_LAST_CRASH, "${t.javaClass.simpleName}: ${t.message}\n$stackTrace")
+                        .putLong(KEY_LAST_CRASH_TIME, System.currentTimeMillis())
+                        .commit()
+                    stopSelf()
+                }
             }
             ACTION_STOP -> {
-                unregisterReceivers()
+                try {
+                    unregisterReceivers()
+                } catch (_: Exception) { }
                 restoreVolumeIfMuted()
                 prefs.edit().putBoolean(KEY_SERVICE_RUNNING, false).apply()
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) { }
                 stopSelf()
                 Log.d(TAG, "Service stopped — receivers unregistered")
             }
         }
-        return super.onStartCommand(intent, flags, startId)
+        return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
+    override fun onBind(intent: Intent): IBinder? {
         super.onBind(intent)
         return null
     }
@@ -121,9 +163,13 @@ class MuterService : LifecycleService() {
     // ---- Receiver registration ----
 
     private fun registerReceivers() {
-        // Register Spotify metadata broadcast (system-wide, no permission needed)
+        // Register Spotify metadata broadcast using ContextCompat for
+        // backward-compatible RECEIVER_EXPORTED flag on modern Android.
         val spotifyFilter = IntentFilter(SpotifyReceiver.ACTION_METADATA_CHANGED)
-        registerReceiver(spotifyReceiver, spotifyFilter, RECEIVER_EXPORTED)
+        ContextCompat.registerReceiver(
+            this, spotifyReceiver, spotifyFilter,
+            ContextCompat.RECEIVER_EXPORTED
+        )
 
         // Register our own package-scoped action receiver
         val actionFilter = IntentFilter().apply {

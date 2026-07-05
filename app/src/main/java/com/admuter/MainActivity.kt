@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        checkForCrash()
         setupViews()
     }
 
@@ -50,6 +51,19 @@ class MainActivity : AppCompatActivity() {
         val isRunning = isServiceRunning()
         binding.switchEnable.isChecked = isRunning
         updateUiForState(isRunning)
+    }
+
+    // ---- Crash Diagnostics ----
+
+    private fun checkForCrash() {
+        val crashInfo = MuterService.getLastCrashInfo(this)
+        if (crashInfo != null) {
+            // Show a meaningful crash message to help debug
+            val shortMsg = crashInfo.take(500)
+            binding.crashInfoText.text = "⚠️ Previous crash: $shortMsg"
+            binding.crashInfoText.visibility = android.view.View.VISIBLE
+            MuterService.clearCrashInfo(this)
+        }
     }
 
     // ---- UI Setup ----
@@ -68,11 +82,17 @@ class MainActivity : AppCompatActivity() {
         if (isRunning) {
             binding.switchEnable.text = "Disable Ad Muting"
             binding.statusText.text = "Service is running"
-            binding.statusIcon.setImageResource(android.R.drawable.ic_lock_silent_mode_off)
+            binding.statusIcon.setImageResource(R.drawable.ic_mute)
+            binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
+                getColor(R.color.spotify_green)
+            )
         } else {
             binding.switchEnable.text = "Enable Ad Muting"
             binding.statusText.text = "Service is stopped"
-            binding.statusIcon.setImageResource(android.R.drawable.ic_lock_silent_mode_on)
+            binding.statusIcon.setImageResource(R.drawable.ic_mute)
+            binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
+                android.graphics.Color.WHITE
+            )
         }
     }
 

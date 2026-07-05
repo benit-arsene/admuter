@@ -7,6 +7,12 @@
     <!-- Permission to post persistent notification for the foreground service -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Base permission required for any foreground service (Android 9+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Permission for foreground service with specialUse type (required on Android 14+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- Permission to detect when Spotify is playing (optional, for foreground detection) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
 
@@ -31,7 +37,11 @@
         <service
             android:name=".MuterService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Automated system audio muting for media ad detection broadcasts" />
+        </service>
 
     </application>
 
