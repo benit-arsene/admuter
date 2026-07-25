@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         val crashInfo = MuterService.getLastCrashInfo(this)
         if (crashInfo != null) {
             val shortMsg = crashInfo.take(500)
-            binding.crashInfoText.text = "⚠️ Previous crash: $shortMsg"
+            binding.crashInfoText.text = "Previous crash: $shortMsg"
             binding.crashInfoText.visibility = android.view.View.VISIBLE
             MuterService.clearCrashInfo(this)
         }
@@ -109,10 +109,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.spotifyStatusText.text = if (isInstalled) {
-            "🎵 Spotify: installed ✓"
+            "Spotify: installed"
         } else {
-            "❌ Spotify: not installed — install Spotify to use this app"
+            "Spotify: not installed — install Spotify to use this app"
         }
+
+        binding.spotifyStatusText.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            if (isInstalled) R.drawable.ic_check else R.drawable.ic_close,
+            0, 0, 0
+        )
 
         binding.spotifyStatusText.setTextColor(
             if (isInstalled) getColor(R.color.spotify_green)
@@ -127,15 +132,19 @@ class MainActivity : AppCompatActivity() {
         val isRunning = isServiceRunning()
 
         val text = if (nlsEnabled) {
-            "📡 Notification Access: ✅ Enabled — ads will be detected"
+            "Notification Access: Enabled — ads will be detected"
         } else {
-            "📡 Notification Access: ❌ Not enabled — enable via setup guide below"
+            "Notification Access: Not enabled — enable via setup guide below"
         }
 
         binding.detectionStatusText.text = text
+        binding.detectionStatusText.setCompoundDrawablesRelativeWithIntrinsicBounds(
+            if (nlsEnabled) R.drawable.ic_check else R.drawable.ic_close,
+            0, 0, 0
+        )
         binding.detectionStatusText.setTextColor(
             if (nlsEnabled) getColor(R.color.spotify_green)
-            else android.graphics.Color.parseColor("#FFFFAA00")
+            else android.graphics.Color.parseColor("#FFFF4444")
         )
     }
 
@@ -243,14 +252,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle("📋 Debug Event Log")
+            .setTitle("Debug Event Log")
             .setView(logView)
-            .setPositiveButton("📋 Copy") { _, _ ->
+            .setPositiveButton("Copy") { _, _ ->
                 val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("AdMuter Debug Log", logText))
                 Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show()
             }
-            .setNeutralButton("🗑 Clear") { _, _ ->
+            .setNeutralButton("Clear") { _, _ ->
                 DebugEventLog.clear()
                 Toast.makeText(this, "Log cleared", Toast.LENGTH_SHORT).show()
             }
@@ -282,7 +291,7 @@ class MainActivity : AppCompatActivity() {
 
         Toast.makeText(
             this,
-            "🎯 Test: Simulated ad detection! Volume should go to 0.\nPress the switch below to check volume and restore it.",
+            "Test ad detection sent. Volume should go to 0.\nToggle the switch to restore volume.",
             Toast.LENGTH_LONG
         ).show()
 
@@ -302,14 +311,14 @@ class MainActivity : AppCompatActivity() {
         val nlsEnabled = isNotificationListenerEnabled()
 
         val lines = mutableListOf<String>()
-        lines.add("📡 Status:")
-        lines.add("   • Spotify: ${if (spotifyInstalled) "✅" else "❌"} Installed")
-        lines.add("   • Notification Access: ${if (nlsEnabled) "✅" else "⏸"} ${if (nlsEnabled) "Granted" else "Not granted"}")
+        lines.add("Status:")
+        lines.add("   Spotify: ${if (spotifyInstalled) "[OK]" else "[--]"} Installed")
+        lines.add("   Notification Access: ${if (nlsEnabled) "[OK]" else "[--]"} ${if (nlsEnabled) "Granted" else "Not granted"}")
         if (isServiceRunning()) {
-            lines.add("   • Service: ✅ Running")
-            lines.add("   • Ad detection: Active (both methods)")
+            lines.add("   Service: [ON] Running")
+            lines.add("   Ad detection: Active")
         } else {
-            lines.add("   • Service: ⏸ Stopped")
+            lines.add("   Service: [OFF] Stopped")
         }
 
         binding.debugInfoText.text = lines.joinToString("\n")
