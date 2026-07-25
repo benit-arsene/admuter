@@ -5,8 +5,10 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/dark_background"
+    android:fitsSystemWindows="true"
     android:padding="24dp">
 
+    <!-- Status Icon -->
     <ImageView
         android:id="@+id/statusIcon"
         android:layout_width="64dp"
@@ -14,11 +16,11 @@
         android:src="@drawable/ic_mute"
         android:contentDescription="@string/app_name"
         android:alpha="0.6"
-        app:layout_constraintBottom_toTopOf="@id/statusText"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <!-- Status Text -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="wrap_content"
@@ -28,11 +30,11 @@
         android:textColor="@android:color/white"
         android:textSize="18sp"
         android:textStyle="bold"
-        app:layout_constraintBottom_toTopOf="@id/switchEnable"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/statusIcon" />
 
+    <!-- Toggle -->
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchEnable"
         android:layout_width="0dp"
@@ -47,6 +49,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/statusText" />
 
+    <!-- Crash Info -->
     <TextView
         android:id="@+id/crashInfoText"
         android:layout_width="0dp"
@@ -57,9 +60,150 @@
         android:textSize="11sp"
         android:visibility="gone"
         android:background="#33FF4444"
-        app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/switchEnable" />
+
+    <!-- Spotify Status -->
+    <TextView
+        android:id="@+id/spotifyStatusText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:padding="12dp"
+        android:textSize="13sp"
+        android:background="#1AFFFFFF"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/crashInfoText" />
+
+    <!-- Detection Status -->
+    <TextView
+        android:id="@+id/detectionStatusText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:padding="12dp"
+        android:textColor="@color/spotify_green"
+        android:textSize="12sp"
+        android:background="#1AFFFFFF"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/spotifyStatusText" />
+
+    <!-- Test Ad Button -->
+    <Button
+        android:id="@+id/btnTestAd"
+        android:layout_width="0dp"
+        android:layout_height="48dp"
+        android:layout_marginTop="16dp"
+        android:text="🎯 Test: Simulate Ad Detection"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/detectionStatusText" />
+
+    <!-- Guide: Method 1 -->
+    <TextView
+        android:id="@+id/method1Title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:text="✅ Method 1: Notification Access"
+        android:textColor="@color/spotify_green"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/btnTestAd" />
+
+    <TextView
+        android:id="@+id/method1Desc"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Settings → Apps → Special Access → Notification Access → Enable AdMuter"
+        android:textColor="#CCFFFFFF"
+        android:textSize="11sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/method1Title" />
+
+    <Button
+        android:id="@+id/btnNotificationSettings"
+        android:layout_width="0dp"
+        android:layout_height="38dp"
+        android:layout_marginTop="6dp"
+        android:text="Open Notification Settings"
+        android:textSize="11sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/method1Desc" />
+
+    <!-- Guide: Method 2 -->
+    <TextView
+        android:id="@+id/method2Title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="🔄 Method 2: Spotify Broadcast"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/btnNotificationSettings" />
+
+    <TextView
+        android:id="@+id/method2Desc"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Spotify Settings → Playback → Device Broadcast Status ON"
+        android:textColor="#CCFFFFFF"
+        android:textSize="11sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/method2Title" />
+
+    <Button
+        android:id="@+id/btnOpenSpotify"
+        android:layout_width="0dp"
+        android:layout_height="38dp"
+        android:layout_marginTop="6dp"
+        android:text="Open Spotify"
+        android:textSize="11sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/method2Desc" />
+
+    <!-- View Debug Log Button -->
+    <Button
+        android:id="@+id/btnViewLog"
+        android:layout_width="0dp"
+        android:layout_height="38dp"
+        android:layout_marginTop="10dp"
+        android:text="📋 View Debug Log"
+        android:textSize="11sp"
+        android:textStyle="bold"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/btnOpenSpotify" />
+
+    <!-- Debug Info -->
+    <TextView
+        android:id="@+id/debugInfoText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:padding="12dp"
+        android:textColor="#88FFFFFF"
+        android:textSize="10sp"
+        android:background="#0DFFFFFF"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/btnViewLog" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

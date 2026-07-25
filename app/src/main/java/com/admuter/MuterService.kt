@@ -125,8 +125,9 @@ class MuterService : LifecycleService() {
                     Log.e(TAG, "Failed to start foreground service: ${t.message}", t)
                     // Record crash for diagnostics (use commit() to ensure it persists)
                     val stackTrace = Log.getStackTraceString(t)
+                    val msg = t.message ?: "(no message)"
                     prefs.edit()
-                        .putString(KEY_LAST_CRASH, "${t.javaClass.simpleName}: ${t.message}\n$stackTrace")
+                        .putString(KEY_LAST_CRASH, "${t.javaClass.simpleName}: $msg\n$stackTrace")
                         .putLong(KEY_LAST_CRASH_TIME, System.currentTimeMillis())
                         .commit()
                     stopSelf()
@@ -145,7 +146,10 @@ class MuterService : LifecycleService() {
                 Log.d(TAG, "Service stopped — receivers unregistered")
             }
         }
-        return START_STICKY
+        // Use START_NOT_STICKY to prevent Android from restarting the service
+        // after we deliberately stop it. With START_STICKY, calling stopSelf()
+        // would cause an infinite restart loop.
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -163,9 +167,12 @@ class MuterService : LifecycleService() {
     // ---- Receiver registration ----
 
     private fun registerReceivers() {
-        // Register Spotify metadata broadcast using ContextCompat for
-        // backward-compatible RECEIVER_EXPORTED flag on modern Android.
-        val spotifyFilter = IntentFilter(SpotifyReceiver.ACTION_METADATA_CHANGED)
+        // Register Spotify metadata & playback-state broadcasts using
+        // ContextCompat for backward-compatible RECEIVER_EXPORTED flag.
+        val spotifyFilter = IntentFilter().apply {
+            addAction(SpotifyReceiver.ACTION_METADATA_CHANGED)
+            addAction(SpotifyReceiver.ACTION_PLAYBACK_STATE_CHANGED)
+        }
         ContextCompat.registerReceiver(
             this, spotifyReceiver, spotifyFilter,
             ContextCompat.RECEIVER_EXPORTED
@@ -293,9 +300,9 @@ class MuterService : LifecycleService() {
         )
 
         val text = if (isAdMuted) {
-            "🎵 Ad muted — waiting for music..."
+            "Ad Detected — Audio Muted"
         } else {
-            getString(R.string.service_running)
+            "Monitoring Spotify Playback"
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)

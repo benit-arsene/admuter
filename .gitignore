@@ -12,3 +12,12 @@
 output.json
 *.keystore
 *.jks
+
+# Build output
+app/build/
+
+# Bundled Android SDK and JDK tools
+tools/
+
+# Windows stray
+nul

@@ -6,26 +6,35 @@ import android.content.Intent
 import android.util.Log
 
 /**
- * BroadcastReceiver that listens for Spotify's "com.spotify.music.metadatachanged"
- * intent to detect when an ad is playing.
+ * BroadcastReceiver that listens for Spotify's broadcast intents and classifies
+ * each event as either an advertisement or a standard music track.
  *
- * Detection logic:
- *  - "id" starts with "spotify:ad"  OR
- *  - "artist" is empty or null       OR
- *  - "track" equals "Advertisement"
+ * Supported Spotify actions:
+ *  - [ACTION_METADATA_CHANGED]  — "com.spotify.music.metadatachanged"
+ *  - [ACTION_PLAYBACK_STATE_CHANGED] — "com.spotify.music.playbackstatechanged"
  *
- * On ad detection, sends a local broadcast/command to [MuterService] to mute.
- * On normal track detection, sends a command to restore volume.
+ * On ad detection it sends a local [ACTION_AD_DETECTED] broadcast to [MuterService].
+ * On normal music it sends [ACTION_MUSIC_DETECTED].
+ * When playback stops it sends [ACTION_NO_METADATA].
  */
 class SpotifyReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SpotifyReceiver"
+
+        /** Spotify broadcast sent when the currently playing track metadata changes. */
         const val ACTION_METADATA_CHANGED = "com.spotify.music.metadatachanged"
 
+        /** Spotify broadcast sent when the playback state (playing/paused) changes. */
+        const val ACTION_PLAYBACK_STATE_CHANGED = "com.spotify.music.playbackstatechanged"
+
+        // Intent extra keys (as documented by Spotify)
         const val EXTRA_ID = "id"
         const val EXTRA_ARTIST = "artist"
         const val EXTRA_TRACK = "track"
+        const val EXTRA_ALBUM = "album"
+        const val EXTRA_LENGTH = "length"
+        const val EXTRA_PLAYING = "playing"
 
         // Local action strings used to communicate with MuterService
         const val ACTION_AD_DETECTED = "com.admuter.ACTION_AD_DETECTED"
@@ -34,77 +43,160 @@ class SpotifyReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != ACTION_METADATA_CHANGED) return
+        when (intent.action) {
+            ACTION_METADATA_CHANGED -> handleMetadataChanged(context, intent)
+            ACTION_PLAYBACK_STATE_CHANGED -> handlePlaybackStateChanged(context, intent)
+        }
+    }
 
+    // ---------------------------------------------------------------
+    //  Metadata Changed handler  (primary ad-detection path)
+    // ---------------------------------------------------------------
+
+    private fun handleMetadataChanged(context: Context, intent: Intent) {
         val id = intent.getStringExtra(EXTRA_ID) ?: ""
         val artist = intent.getStringExtra(EXTRA_ARTIST) ?: ""
         val track = intent.getStringExtra(EXTRA_TRACK) ?: ""
+        val album = intent.getStringExtra(EXTRA_ALBUM) ?: ""
+        val length = intent.getIntExtra(EXTRA_LENGTH, -1)
+        val playing = intent.getBooleanExtra(EXTRA_PLAYING, false)
 
-        // Debug log — visible in logcat for troubleshooting
-        Log.d("AdMuter", "Received track: $track by $artist, ID: $id")
+        // ---- Diagnostic logging (logcat + in-app) ----
+        val logLine = "METADATA_CHANGED | ID=$id | Artist=$artist | Track=$track | Album=$album | Length=$length | Playing=$playing"
+        Log.d("AdMuterDebug", "Action: $ACTION_METADATA_CHANGED | ID: $id | Artist: $artist | Track: $track | Album: $album | Length: $length | Playing: $playing")
+        Log.d(TAG, "Metadata received — $logLine")
+        DebugEventLog.add("[SpotifyReceiver] $logLine")
 
-        Log.d(TAG, "Metadata received — id=$id, artist=$artist, track=$track")
-
-        // Check for empty metadata (playback stopped) BEFORE ad detection,
-        // because isAdMetadata returns true for blank artist even when all
-        // fields are empty.
+        // Empty metadata  →  playback stopped
         if (id.isEmpty() && artist.isEmpty() && track.isEmpty()) {
             Log.d(TAG, "→ Empty metadata (playback stopped), sending NO_METADATA")
-            val localIntent = Intent().apply {
-                `package` = context.packageName
-                action = ACTION_NO_METADATA
-            }
-            context.sendBroadcast(localIntent)
+            DebugEventLog.add("[SpotifyReceiver] → No metadata — sending NO_METADATA")
+            sendLocalBroadcast(context, ACTION_NO_METADATA)
             return
         }
 
-        val isAd = isAdMetadata(id, artist, track, intent)
+        // Classify as ad or music
+        val isAd = isAdMetadata(id, artist, track, playing, length)
 
-        val localIntent = Intent().apply {
-            `package` = context.packageName
-            action = if (isAd) {
-                Log.d(TAG, "→ Ad detected, sending AD_DETECTED")
-                ACTION_AD_DETECTED
-            } else {
-                Log.d(TAG, "→ Normal music track detected, sending MUSIC_DETECTED")
-                ACTION_MUSIC_DETECTED
-            }
+        val localAction = if (isAd) {
+            Log.d(TAG, "→ AD detected, sending AD_DETECTED")
+            DebugEventLog.add("[SpotifyReceiver] → AD classified as ad")
+            ACTION_AD_DETECTED
+        } else {
+            Log.d(TAG, "→ Normal music track detected, sending MUSIC_DETECTED")
+            DebugEventLog.add("[SpotifyReceiver] → Track classified as music")
+            ACTION_MUSIC_DETECTED
         }
 
-        // Send local broadcast to MuterService via the package-specific broadcast
-        context.sendBroadcast(localIntent)
+        sendLocalBroadcast(context, localAction)
     }
+
+    // ---------------------------------------------------------------
+    //  Playback State Changed handler  (diagnostics + stop detection)
+    // ---------------------------------------------------------------
+
+    private fun handlePlaybackStateChanged(context: Context, intent: Intent) {
+        val id = intent.getStringExtra(EXTRA_ID) ?: ""
+        val artist = intent.getStringExtra(EXTRA_ARTIST) ?: ""
+        val track = intent.getStringExtra(EXTRA_TRACK) ?: ""
+        val album = intent.getStringExtra(EXTRA_ALBUM) ?: ""
+        val length = intent.getIntExtra(EXTRA_LENGTH, -1)
+        val playing = intent.getBooleanExtra(EXTRA_PLAYING, false)
+
+        // ---- Diagnostic logging (logcat + in-app) ----
+        val logLine = "PLAYBACK_STATE_CHANGED | ID=$id | Artist=$artist | Track=$track | Album=$album | Length=$length | Playing=$playing"
+        Log.d("AdMuterDebug", "Action: $ACTION_PLAYBACK_STATE_CHANGED | ID: $id | Artist: $artist | Track: $track | Album: $album | Length: $length | Playing: $playing")
+        Log.d(TAG, "Playback state changed — $logLine")
+        DebugEventLog.add("[SpotifyReceiver] $logLine")
+
+        // When playback stops (e.g. user exits Spotify or ad finishes), send NO_METADATA.
+        if (!playing) {
+            Log.d(TAG, "→ Playback stopped, sending NO_METADATA")
+            DebugEventLog.add("[SpotifyReceiver] → Playback stopped — sending NO_METADATA")
+            sendLocalBroadcast(context, ACTION_NO_METADATA)
+            return
+        }
+
+        // Only classify as ad if we have enough metadata to make a determination.
+        // Otherwise let the next METADATA_CHANGED broadcast handle it.
+        if (id.isNotEmpty() || artist.isNotEmpty() || track.isNotEmpty()) {
+            val isAd = isAdMetadata(id, artist, track, playing, length)
+            val localAction = if (isAd) {
+                Log.d(TAG, "→ AD detected from playback state, sending AD_DETECTED")
+                DebugEventLog.add("[SpotifyReceiver] → Playback state: AD")
+                ACTION_AD_DETECTED
+            } else {
+                Log.d(TAG, "→ Music detected from playback state, sending MUSIC_DETECTED")
+                DebugEventLog.add("[SpotifyReceiver] → Playback state: Music")
+                ACTION_MUSIC_DETECTED
+            }
+            sendLocalBroadcast(context, localAction)
+        } else {
+            Log.d(TAG, "→ Playing, but no metadata yet — waiting for METADATA_CHANGED")
+            DebugEventLog.add("[SpotifyReceiver] → Playing, no metadata yet")
+        }
+    }
+
+    // ---------------------------------------------------------------
+    //  Ad-classification logic
+    // ---------------------------------------------------------------
 
     /**
      * Determines whether the given metadata corresponds to a Spotify ad.
      *
-     * Detection signals:
-     *  - id starts with "spotify:ad" or contains "ad"
-     *  - artist is blank or null while a track is active
-     *  - track equals "Advertisement" (case-insensitive)
-     *  - playbackPosition is very short (ad-length, e.g. < 60s)
+     * Detection rules (any **one** being true classifies as an ad):
+     *
+     * 1. **ID-based** — `id` starts with `"spotify:ad:"` or contains `":ad:"` as a URI segment.
+     * 2. **Track-based** — `track` equals `"Advertisement"` or `"Spotify"` (case-insensitive).
+     * 3. **Artist-based** — `artist` is null / empty / equals `"Spotify"` while `playing` is true.
+     * 4. **Duration-based** — `length` is in (0..30 000] ms AND artist is empty or `"Spotify"`.
      */
     internal fun isAdMetadata(
         id: String,
         artist: String,
         track: String,
-        intent: Intent? = null
+        playing: Boolean,
+        length: Int = -1
     ): Boolean {
-        // Primary heuristics
-        if (id.startsWith("spotify:ad") ||
-            artist.isBlank() ||
-            track.equals("Advertisement", ignoreCase = true)
-        ) return true
+        // --- Rule 1: ID-based ---
+        if (id.startsWith("spotify:ad") || id.contains(":ad:")) {
+            DebugEventLog.add("[isAdMetadata] Rule 1 matched: id='$id'")
+            return true
+        }
 
-        // Extra: check track length — ads are typically short (< 60 seconds)
-        if (intent != null && intent.hasExtra("length")) {
-            val lengthMs = intent.getLongExtra("length", -1)
-            if (lengthMs in 1..60_000) {
-                Log.d(TAG, "→ Short length (${lengthMs}ms) suggests an ad")
-                return true
-            }
+        // --- Rule 2: Track-based ---
+        if (track.equals("Advertisement", ignoreCase = true) ||
+            track.equals("Spotify", ignoreCase = true)
+        ) {
+            DebugEventLog.add("[isAdMetadata] Rule 2 matched: track='$track'")
+            return true
+        }
+
+        // --- Rule 3: Artist-based while playing ---
+        val artistIsGeneric = artist.isBlank() || artist.equals("Spotify", ignoreCase = true)
+        if (artistIsGeneric && playing) {
+            DebugEventLog.add("[isAdMetadata] Rule 3 matched: artist='$artist', playing=$playing")
+            return true
+        }
+
+        // --- Rule 4: Duration-based with generic artist ---
+        if (length in 1..30_000 && artistIsGeneric) {
+            DebugEventLog.add("[isAdMetadata] Rule 4 matched: length=${length}ms, artist='$artist'")
+            return true
         }
 
         return false
+    }
+
+    // ---------------------------------------------------------------
+    //  Helpers
+    // ---------------------------------------------------------------
+
+    private fun sendLocalBroadcast(context: Context, action: String) {
+        val localIntent = Intent().apply {
+            `package` = context.packageName
+            this.action = action
+        }
+        context.sendBroadcast(localIntent)
     }
 }

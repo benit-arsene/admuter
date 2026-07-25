@@ -13,8 +13,17 @@
     <!-- Permission for foreground service with specialUse type (required on Android 14+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
-    <!-- Permission to detect when Spotify is playing (optional, for foreground detection) -->
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <!-- Required on Android 11+ to query whether Spotify is installed.
+         Without this, getPackageInfo("com.spotify.music") throws
+         NameNotFoundException even when Spotify is installed. -->
+    <queries>
+        <package android:name="com.spotify.music" />
+    </queries>
+
+    <!-- BIND_NOTIFICATION_LISTENER_SERVICE is NOT declared as uses-permission
+         to avoid Google Play Protect blocking installation. It's only set on
+         the service tag below (android:permission), which is sufficient for
+         the system to bind to it. -->
 
     <application
         android:allowBackup="true"
@@ -41,6 +50,32 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Automated system audio muting for media ad detection broadcasts" />
+        </service>
+
+        <!-- NotificationListenerService (original) — detects Spotify ads from
+             notifications. Works on all Android versions without any Spotify
+             settings needed. User must enable in Settings → Notification Access.
+             exported="true" is required so the system can bind to it. -->
+        <service
+            android:name=".SpotifyNotificationListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- AdNotificationListener — improved fallback notification listener
+             with broader keyword detection for ad identification.
+             Both listeners are declared so the system can bind to either;
+             Android will deliver events to both. -->
+        <service
+            android:name=".AdNotificationListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
 
     </application>

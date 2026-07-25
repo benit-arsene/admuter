@@ -1,11 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.AdMuter" parent="Theme.Material3.Light.NoActionBar">
+    <!--
+        IMPORTANT: Use DayNight theme so the app adapts to system light/dark mode.
+        Also, DO NOT use colorPrimaryVariant — that attribute was removed in
+        Material 3 and will cause an immediate crash on launch!
+        Material 3 uses colorPrimary, colorOnPrimary, colorPrimaryContainer, etc.
+    -->
+    <!--
+        Use DayNight theme for maximum device compatibility.
+        Automatically switches between light/dark based on system settings.
+        Only use attributes that are 100% confirmed to exist in Material3.
+        No colorPrimaryVariant — that was removed from M3 and causes crash.
+    -->
+    <style name="Theme.AdMuter" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/spotify_green</item>
-        <item name="colorPrimaryVariant">@color/spotify_green_dark</item>
-        <item name="colorOnPrimary">@color/white</item>
-        <item name="colorSecondary">@color/spotify_green</item>
-        <item name="colorOnSecondary">@color/white</item>
+        <item name="colorOnPrimary">@color/black</item>
         <item name="android:statusBarColor">@color/spotify_green_dark</item>
     </style>
 </resources>

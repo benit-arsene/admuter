@@ -6,3 +6,7 @@
 
 # Keep the inner ActionReceiver class
 -keep class com.admuter.MuterService$ActionReceiver { *; }
+
+# Keep the NotificationListenerService classes (instantiated by the system via manifest)
+-keep class com.admuter.SpotifyNotificationListener { *; }
+-keep class com.admuter.AdNotificationListener { *; }
