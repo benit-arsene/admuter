@@ -46,7 +46,8 @@ class MainActivity : AppCompatActivity() {
                 "Notification permission is required for the foreground service.",
                 Toast.LENGTH_LONG
             ).show()
-            binding.switchEnable.isChecked = false
+            // User denied — revert the switch to off
+            updateUi(isRunning = false)
         }
     }
 
@@ -63,6 +64,8 @@ class MainActivity : AppCompatActivity() {
             checkSpotifyInstalled()
             updateDetectionStatus()
             setupViews()
+            // Initial UI render from persisted state
+            updateUi(isRunning = isServiceRunning())
         } catch (t: Throwable) {
             try {
                 val prefs = getSharedPreferences("admuter_prefs", MODE_PRIVATE)
@@ -80,25 +83,50 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         val isRunning = isServiceRunning()
-        binding.switchEnable.isChecked = isRunning
-        updateUiForState(isRunning)
+        updateUi(isRunning)
         checkSpotifyInstalled()
         updateDetectionStatus()
     }
 
-    // ---- Crash Diagnostics ----
+    // ---------------------------------------------------------------
+    //  Single source of truth for the service running state
+    // ---------------------------------------------------------------
 
-    private fun checkForCrash() {
-        val crashInfo = MuterService.getLastCrashInfo(this)
-        if (crashInfo != null) {
-            val shortMsg = crashInfo.take(500)
-            binding.crashInfoText.text = "Previous crash: $shortMsg"
-            binding.crashInfoText.visibility = android.view.View.VISIBLE
-            MuterService.clearCrashInfo(this)
+    private fun isServiceRunning(): Boolean = MuterService.isRunning(this)
+
+    // ---------------------------------------------------------------
+    //  Master UI update — call this whenever isRunning changes
+    // ---------------------------------------------------------------
+
+    private fun updateUi(isRunning: Boolean) {
+        // Toggle switch
+        binding.switchEnable.isChecked = isRunning
+
+        // Switch label & status header
+        if (isRunning) {
+            binding.switchEnable.text = "Ad Muting Enabled"
+            binding.statusText.text = "Service is running"
+            binding.statusIcon.setImageResource(R.drawable.ic_mute)
+            binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
+                getColor(R.color.spotify_green)
+            )
+            binding.statusIcon.alpha = 1.0f
+        } else {
+            binding.switchEnable.text = "Enable Ad Muting"
+            binding.statusText.text = "Service is stopped"
+            binding.statusIcon.setImageResource(R.drawable.ic_mute)
+            binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
+                android.graphics.Color.WHITE
+            )
+            binding.statusIcon.alpha = 0.6f
         }
+
     }
 
-    // ---- Spotify Detection ----
+
+    // ---------------------------------------------------------------
+    //  Spotify detection status
+    // ---------------------------------------------------------------
 
     private fun checkSpotifyInstalled() {
         val isInstalled = try {
@@ -125,11 +153,8 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    // ---- Detection Status ----
-
     private fun updateDetectionStatus() {
         val nlsEnabled = isNotificationListenerEnabled()
-        val isRunning = isServiceRunning()
 
         val text = if (nlsEnabled) {
             "Notification Access: Enabled — ads will be detected"
@@ -160,9 +185,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---- UI Setup ----
+    // ---------------------------------------------------------------
+    //  Crash diagnostics
+    // ---------------------------------------------------------------
+
+    private fun checkForCrash() {
+        val crashInfo = MuterService.getLastCrashInfo(this)
+        if (crashInfo != null) {
+            val shortMsg = crashInfo.take(500)
+            binding.crashInfoText.text = "Previous crash: $shortMsg"
+            binding.crashInfoText.visibility = android.view.View.VISIBLE
+            MuterService.clearCrashInfo(this)
+        }
+    }
+
+    // ---------------------------------------------------------------
+    //  UI setup — listeners
+    // ---------------------------------------------------------------
 
     private fun setupViews() {
+        // The switch listener reacts to the user's action directly:
+        // checked = ON → start service; unchecked = OFF → stop service.
         binding.switchEnable.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
                 requestNotificationPermissionAndStart()
@@ -228,16 +271,15 @@ class MainActivity : AppCompatActivity() {
         binding.btnViewLog.setOnClickListener {
             showDebugLogDialog()
         }
-
-        updateDebugInfo()
     }
 
-    // ---- Debug Log Dialog ----
+    // ---------------------------------------------------------------
+    //  Debug Log Dialog
+    // ---------------------------------------------------------------
 
     private fun showDebugLogDialog() {
         val logText = DebugEventLog.getText().ifEmpty { "(No events captured yet)" }
 
-        // Build a scrollable monospace text view to display the log
         val logView = TextView(this).apply {
             text = logText
             textSize = 10f
@@ -247,7 +289,6 @@ class MainActivity : AppCompatActivity() {
             setLineSpacing(4f, 1f)
             typeface = android.graphics.Typeface.MONOSPACE
             movementMethod = android.text.method.ScrollingMovementMethod()
-            // Set a fixed height so the dialog doesn't grow too large
             setHeight(resources.displayMetrics.density.let { d -> (400 * d).toInt() })
         }
 
@@ -268,7 +309,9 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    // ---- Test Ad Detection ----
+    // ---------------------------------------------------------------
+    //  Test Ad Detection
+    // ---------------------------------------------------------------
 
     private fun testAdDetection() {
         if (!isServiceRunning()) {
@@ -298,54 +341,9 @@ class MainActivity : AppCompatActivity() {
         Log.d("AdMuter", "Test ad detection sent — current volume was $currentVolume")
     }
 
-    // ---- Debug Info ----
-
-    private fun updateDebugInfo() {
-        val spotifyInstalled = try {
-            packageManager.getPackageInfo("com.spotify.music", 0)
-            true
-        } catch (_: PackageManager.NameNotFoundException) {
-            false
-        }
-
-        val nlsEnabled = isNotificationListenerEnabled()
-
-        val lines = mutableListOf<String>()
-        lines.add("Status:")
-        lines.add("   Spotify: ${if (spotifyInstalled) "[OK]" else "[--]"} Installed")
-        lines.add("   Notification Access: ${if (nlsEnabled) "[OK]" else "[--]"} ${if (nlsEnabled) "Granted" else "Not granted"}")
-        if (isServiceRunning()) {
-            lines.add("   Service: [ON] Running")
-            lines.add("   Ad detection: Active")
-        } else {
-            lines.add("   Service: [OFF] Stopped")
-        }
-
-        binding.debugInfoText.text = lines.joinToString("\n")
-    }
-
-    private fun updateUiForState(isRunning: Boolean) {
-        if (isRunning) {
-            binding.switchEnable.text = "Disable Ad Muting"
-            binding.statusText.text = "Service is running"
-            binding.statusIcon.setImageResource(R.drawable.ic_mute)
-            binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
-                getColor(R.color.spotify_green)
-            )
-            binding.statusIcon.alpha = 1.0f
-        } else {
-            binding.switchEnable.text = "Enable Ad Muting"
-            binding.statusText.text = "Service is stopped"
-            binding.statusIcon.setImageResource(R.drawable.ic_mute)
-            binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
-                android.graphics.Color.WHITE
-            )
-            binding.statusIcon.alpha = 0.6f
-        }
-        updateDebugInfo()
-    }
-
-    // ---- Permission Handling ----
+    // ---------------------------------------------------------------
+    //  Permission Handling
+    // ---------------------------------------------------------------
 
     private fun requestNotificationPermissionAndStart() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -372,9 +370,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---- Service Control ----
+    // ---------------------------------------------------------------
+    //  Service Control
+    // ---------------------------------------------------------------
 
     private fun startMuterService() {
+        // Set the in-memory running state BEFORE the async service call,
+        // so every UI read of isServiceRunning() immediately sees the correct value.
+        MuterService.setRunningState(true)
+
         val intent = Intent(this, MuterService::class.java).apply {
             action = MuterService.ACTION_START
         }
@@ -383,21 +387,23 @@ class MainActivity : AppCompatActivity() {
         } else {
             startService(intent)
         }
-        binding.switchEnable.isChecked = true
-        updateUiForState(true)
+
+        // Update UI to reflect the new state
+        updateUi(isRunning = true)
         Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
     }
 
     private fun stopMuterService() {
+        // Set the in-memory running state BEFORE the async service call.
+        MuterService.setRunningState(false)
+
         val intent = Intent(this, MuterService::class.java).apply {
             action = MuterService.ACTION_STOP
         }
         startService(intent)
-        updateUiForState(false)
-        Toast.makeText(this, R.string.service_stopped, Toast.LENGTH_SHORT).show()
-    }
 
-    private fun isServiceRunning(): Boolean {
-        return MuterService.isRunning(this)
+        // Update UI to reflect the new state
+        updateUi(isRunning = false)
+        Toast.makeText(this, R.string.service_stopped, Toast.LENGTH_SHORT).show()
     }
 }

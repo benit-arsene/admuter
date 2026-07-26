@@ -46,11 +46,34 @@ class MuterService : LifecycleService() {
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
 
         /**
-         * Query whether the service is currently running via persisted state.
+         * In-memory running state, updated instantly by MainActivity
+         * (no async SharedPreferences delay). Persisted to prefs as backup.
          */
-        fun isRunning(context: Context): Boolean {
+        @Volatile
+        private var runningState: Boolean = false
+
+        /**
+         * Set the running state immediately (called by Activity before async service start/stop).
+         */
+        fun setRunningState(running: Boolean) {
+            runningState = running
+        }
+
+        /**
+         * Query whether the service is currently running — uses the in-memory
+         * state for instant accuracy (no SharedPreferences delay).
+         */
+        fun isRunning(@Suppress("UNUSED_PARAMETER") context: Context): Boolean {
+            return runningState
+        }
+
+        /**
+         * Persist the running state to SharedPreferences (called by the service itself).
+         */
+        fun persistRunningState(context: Context, running: Boolean) {
+            runningState = running
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            return prefs.getBoolean(KEY_SERVICE_RUNNING, false)
+            prefs.edit().putBoolean(KEY_SERVICE_RUNNING, running).apply()
         }
 
         /**
@@ -119,7 +142,7 @@ class MuterService : LifecycleService() {
                         startForeground(NOTIFICATION_ID, notification)
                     }
                     registerReceivers()
-                    prefs.edit().putBoolean(KEY_SERVICE_RUNNING, true).apply()
+                    persistRunningState(this, true)
                     Log.d(TAG, "Service started — receivers registered")
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed to start foreground service: ${t.message}", t)
@@ -138,7 +161,7 @@ class MuterService : LifecycleService() {
                     unregisterReceivers()
                 } catch (_: Exception) { }
                 restoreVolumeIfMuted()
-                prefs.edit().putBoolean(KEY_SERVICE_RUNNING, false).apply()
+                persistRunningState(this, false)
                 try {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                 } catch (_: Exception) { }
@@ -160,7 +183,7 @@ class MuterService : LifecycleService() {
     override fun onDestroy() {
         unregisterReceivers()
         restoreVolumeIfMuted()
-        prefs.edit().putBoolean(KEY_SERVICE_RUNNING, false).apply()
+        persistRunningState(this, false)
         super.onDestroy()
     }
 

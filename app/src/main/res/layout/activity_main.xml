@@ -209,21 +209,7 @@
         app:iconPadding="6dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btnOpenSpotify" />
-
-    <!-- Debug Info -->
-    <TextView
-        android:id="@+id/debugInfoText"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
-        android:padding="12dp"
-        android:textColor="#88FFFFFF"
-        android:textSize="10sp"
-        android:background="#0DFFFFFF"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/btnViewLog" />
+        app:layout_constraintTop_toBottomOf="@id/btnOpenSpotify"
+        app:layout_constraintBottom_toBottomOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

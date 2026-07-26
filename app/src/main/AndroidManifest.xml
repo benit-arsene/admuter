@@ -52,9 +52,10 @@
                 android:value="Automated system audio muting for media ad detection broadcasts" />
         </service>
 
-        <!-- NotificationListenerService (original) — detects Spotify ads from
-             notifications. Works on all Android versions without any Spotify
-             settings needed. User must enable in Settings → Notification Access.
+        <!-- SpotifyNotificationListener — detects Spotify ads directly from
+             notification text (checks for "Advertisement" / "Ad" keywords).
+             Simpler approach — works without any Spotify settings.
+             User must enable in Settings → Notification Access.
              exported="true" is required so the system can bind to it. -->
         <service
             android:name=".SpotifyNotificationListener"
@@ -65,10 +66,9 @@
             </intent-filter>
         </service>
 
-        <!-- AdNotificationListener — improved fallback notification listener
-             with broader keyword detection for ad identification.
-             Both listeners are declared so the system can bind to either;
-             Android will deliver events to both. -->
+        <!-- AdNotificationListener — enhanced detection using MediaSession API.
+             Falls back to keyword matching if MediaSession is unavailable.
+             exported="true" is required so the system can bind to it. -->
         <service
             android:name=".AdNotificationListener"
             android:exported="true"
