@@ -16,11 +16,19 @@ import android.util.Log
  * On ad detection it sends a local [ACTION_AD_DETECTED] broadcast to [MuterService].
  * On normal music it sends [ACTION_MUSIC_DETECTED].
  * When playback stops it sends [ACTION_NO_METADATA].
+ *
+ * ## Debounce
+ * A track-update cache prevents duplicate broadcasts for the same track
+ * within a 500 ms window, eliminating redundant mute/unmute cycles when
+ * both METADATA_CHANGED and PLAYBACK_STATE_CHANGED fire for the same event.
  */
 class SpotifyReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "SpotifyReceiver"
+
+        /** Minimum time (ms) between duplicate actions to avoid re-processing. */
+        private const val DEBOUNCE_MS = 500L
 
         /** Spotify broadcast sent when the currently playing track metadata changes. */
         const val ACTION_METADATA_CHANGED = "com.spotify.music.metadatachanged"
@@ -42,11 +50,35 @@ class SpotifyReceiver : BroadcastReceiver() {
         const val ACTION_NO_METADATA = "com.admuter.ACTION_NO_METADATA"
     }
 
+    // ---- Debounce cache ----
+    @Volatile
+    private var lastTrackId: String? = null
+    @Volatile
+    private var lastPlaybackState: Boolean? = null
+    @Volatile
+    private var lastProcessTimestamp: Long = 0L
+
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_METADATA_CHANGED -> handleMetadataChanged(context, intent)
             ACTION_PLAYBACK_STATE_CHANGED -> handlePlaybackStateChanged(context, intent)
         }
+    }
+
+    /**
+     * Returns true if this event should be skipped due to the debounce window.
+     * Updates the cache if the event is different from the last processed one.
+     */
+    private fun isDuplicate(id: String, playing: Boolean): Boolean {
+        val now = System.currentTimeMillis()
+        if (id == lastTrackId && playing == lastPlaybackState && (now - lastProcessTimestamp) < DEBOUNCE_MS) {
+            Log.d(TAG, "Debounced duplicate track: id=$id playing=$playing")
+            return true
+        }
+        lastTrackId = id
+        lastPlaybackState = playing
+        lastProcessTimestamp = now
+        return false
     }
 
     // ---------------------------------------------------------------
@@ -72,8 +104,12 @@ class SpotifyReceiver : BroadcastReceiver() {
             Log.d(TAG, "→ Empty metadata (playback stopped), sending NO_METADATA")
             DebugEventLog.add("[SpotifyReceiver] → No metadata — sending NO_METADATA")
             sendLocalBroadcast(context, ACTION_NO_METADATA)
+            lastTrackId = null
             return
         }
+
+        // Debounce: skip if same track within window
+        if (isDuplicate(id, playing)) return
 
         // Classify as ad or music
         val isAd = isAdMetadata(id, artist, track, playing, length)
@@ -114,12 +150,16 @@ class SpotifyReceiver : BroadcastReceiver() {
             Log.d(TAG, "→ Playback stopped, sending NO_METADATA")
             DebugEventLog.add("[SpotifyReceiver] → Playback stopped — sending NO_METADATA")
             sendLocalBroadcast(context, ACTION_NO_METADATA)
+            lastTrackId = null
             return
         }
 
         // Only classify as ad if we have enough metadata to make a determination.
         // Otherwise let the next METADATA_CHANGED broadcast handle it.
         if (id.isNotEmpty() || artist.isNotEmpty() || track.isNotEmpty()) {
+            // Debounce: skip if same track within window
+            if (isDuplicate(id, playing)) return
+
             val isAd = isAdMetadata(id, artist, track, playing, length)
             val localAction = if (isAd) {
                 Log.d(TAG, "→ AD detected from playback state, sending AD_DETECTED")

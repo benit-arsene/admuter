@@ -29,11 +29,27 @@ import com.admuter.databinding.ActivityMainBinding
  *   1. NotificationListenerService (reliable, needs system settings)
  *   2. Spotify Broadcast (needs Device Broadcast Status in Spotify)
  * Includes a test button to verify ad muting works.
+ *
+ * ## Key design decisions
+ *  - The Activity NEVER speculatively sets the service running state.
+ *    UI state strictly reflects [MuterService.isRunning] which is only
+ *    updated by the service itself.
+ *  - The switch control is optimistic (user sees their action immediately),
+ *    but [onResume] corrects any mismatch with the actual service state.
+ *  - A guard flag prevents the switch's [OnCheckedChangeListener] from
+ *    re-triggering service start/stop when [updateUi] programmatically changes it.
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var audioManager: AudioManager
+
+    /**
+     * Prevents recursive calls when [updateUi] programmatically changes
+     * the switch position, which would otherwise fire the
+     * [OnCheckedChangeListener] and re-trigger service start/stop.
+     */
+    private var ignoreSwitchChange = false
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -64,7 +80,8 @@ class MainActivity : AppCompatActivity() {
             checkSpotifyInstalled()
             updateDetectionStatus()
             setupViews()
-            // Initial UI render from persisted state
+            // Initial UI render from persisted state — does NOT rely on
+            // pre-set runningState; queries the service's own in-memory flag.
             updateUi(isRunning = isServiceRunning())
         } catch (t: Throwable) {
             try {
@@ -82,6 +99,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Always correct the UI against the actual service state on resume.
+        // This handles the case where the service crashed or was killed
+        // while the Activity was paused.
         val isRunning = isServiceRunning()
         updateUi(isRunning)
         checkSpotifyInstalled()
@@ -99,8 +119,10 @@ class MainActivity : AppCompatActivity() {
     // ---------------------------------------------------------------
 
     private fun updateUi(isRunning: Boolean) {
-        // Toggle switch
+        // Guard: prevent programmatic setChecked from triggering the listener
+        ignoreSwitchChange = true
         binding.switchEnable.isChecked = isRunning
+        ignoreSwitchChange = false
 
         // Switch label & status header
         if (isRunning) {
@@ -120,9 +142,7 @@ class MainActivity : AppCompatActivity() {
             )
             binding.statusIcon.alpha = 0.6f
         }
-
     }
-
 
     // ---------------------------------------------------------------
     //  Spotify detection status
@@ -206,11 +226,15 @@ class MainActivity : AppCompatActivity() {
     private fun setupViews() {
         // The switch listener reacts to the user's action directly:
         // checked = ON → start service; unchecked = OFF → stop service.
+        // The [ignoreSwitchChange] guard prevents re-triggering when
+        // [updateUi] programmatically sets the switch position.
         binding.switchEnable.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked) {
-                requestNotificationPermissionAndStart()
-            } else {
-                stopMuterService()
+            if (!ignoreSwitchChange) {
+                if (isChecked) {
+                    requestNotificationPermissionAndStart()
+                } else {
+                    stopMuterService()
+                }
             }
         }
 
@@ -371,14 +395,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------------------------------------------------------------
-    //  Service Control
+    //  Service Control  —  No speculative state setting
     // ---------------------------------------------------------------
 
+    /**
+     * Starts [MuterService] by firing [MuterService.ACTION_START].
+     * Does NOT speculatively set [MuterService.setRunningState] — the
+     * service itself updates its own running flag when it successfully
+     * enters the foreground.
+     *
+     * The UI is updated optimistically to reflect the user's action;
+     * [onResume] will correct any mismatch with the actual service state.
+     */
     private fun startMuterService() {
-        // Set the in-memory running state BEFORE the async service call,
-        // so every UI read of isServiceRunning() immediately sees the correct value.
-        MuterService.setRunningState(true)
-
         val intent = Intent(this, MuterService::class.java).apply {
             action = MuterService.ACTION_START
         }
@@ -388,21 +417,21 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
         }
 
-        // Update UI to reflect the new state
         updateUi(isRunning = true)
         Toast.makeText(this, R.string.service_started, Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * Stops [MuterService] by firing [MuterService.ACTION_STOP].
+     * Does NOT speculatively set [MuterService.setRunningState] — the
+     * service itself updates its own running flag in [MuterService.onDestroy].
+     */
     private fun stopMuterService() {
-        // Set the in-memory running state BEFORE the async service call.
-        MuterService.setRunningState(false)
-
         val intent = Intent(this, MuterService::class.java).apply {
             action = MuterService.ACTION_STOP
         }
         startService(intent)
 
-        // Update UI to reflect the new state
         updateUi(isRunning = false)
         Toast.makeText(this, R.string.service_stopped, Toast.LENGTH_SHORT).show()
     }

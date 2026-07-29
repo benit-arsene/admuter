@@ -11,20 +11,46 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Foreground Service that:
- *  1. Registers [SpotifyReceiver] dynamically.
- *  2. Also registers an internal [ActionReceiver] to receive the local broadcasts
- *     fired by [SpotifyReceiver].
+ *  1. Registers [SpotifyReceiver] dynamically (for Spotify's broadcast intents).
+ *  2. Registers an internal [ActionReceiver] to receive local broadcasts
+ *     from [SpotifyReceiver], [SpotifyNotificationListener], or [MainActivity] (test).
  *  3. Uses [AudioManager] to mute STREAM_MUSIC when an ad is detected and
  *     restores the cached volume when normal music resumes.
+ *  4. Automatically dispatches a "skip"/next-track command when an ad is
+ *     detected, so the ad is dismissed as well as muted.
+ *
+ * ## Thread safety
+ * All mutable shared state ([isMutedForAd], [cachedVolume], [lastSkipTimestamp])
+ * uses [AtomicBoolean] / [AtomicInteger] / [AtomicLong] so that calls from
+ * binder threads (BroadcastReceiver.onReceive) and the main thread are safe.
+ *
+ * ## Clean lifecycle
+ *  - [ACTION_STOP] simply calls [stopSelf]; all cleanup (receiver
+ *    unregistration, volume restoration, state persistence) happens in
+ *    [onDestroy].
+ *  - [MainActivity] never speculatively sets the running state —
+ *    it reads [isRunning] from the in-memory flag, which is only
+ *    updated by the service itself.
+ *
+ * ## Auto-skip cooldown
+ * Skip attempts are rate-limited to one every [SKIP_COOLDOWN_MS]
+ * milliseconds to avoid spamming the system when multiple ad-detection
+ * sources fire simultaneously.
  */
 class MuterService : LifecycleService() {
 
@@ -45,19 +71,15 @@ class MuterService : LifecycleService() {
         private const val KEY_LAST_CRASH = "last_crash"
         private const val KEY_LAST_CRASH_TIME = "last_crash_time"
 
+        /** Minimum interval (ms) between consecutive auto-skip attempts. */
+        private const val SKIP_COOLDOWN_MS = 3000L
+
         /**
-         * In-memory running state, updated instantly by MainActivity
-         * (no async SharedPreferences delay). Persisted to prefs as backup.
+         * In-memory running state, updated ONLY by the service itself.
+         * MainActivity reads this to determine the current state.
          */
         @Volatile
         private var runningState: Boolean = false
-
-        /**
-         * Set the running state immediately (called by Activity before async service start/stop).
-         */
-        fun setRunningState(running: Boolean) {
-            runningState = running
-        }
 
         /**
          * Query whether the service is currently running — uses the in-memory
@@ -68,7 +90,8 @@ class MuterService : LifecycleService() {
         }
 
         /**
-         * Persist the running state to SharedPreferences (called by the service itself).
+         * Persist the running state to SharedPreferences and update in-memory flag.
+         * Called ONLY by the service itself.
          */
         fun persistRunningState(context: Context, running: Boolean) {
             runningState = running
@@ -97,23 +120,26 @@ class MuterService : LifecycleService() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var prefs: SharedPreferences
 
-    /**
-     * The volume level (0..[maxVolume]) that was set by the user before
-     * we muted for an ad. Restored when a normal track is detected.
-     */
-    private var cachedVolume: Int = -1
+    // ---- Thread-safe state ----
+
+    /** Volume level to restore after an ad ends. -1 means uncached. */
+    private val cachedVolume = AtomicInteger(-1)
+
+    /** Whether we are currently muted for an ad. */
+    private val isMutedForAd = AtomicBoolean(false)
+
+    /** Timestamp (ms) of the last auto-skip attempt, for cooldown enforcement. */
+    private val lastSkipTimestamp = AtomicLong(0L)
+
     private val maxVolume: Int
         get() = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-
-    /** Whether we are currently in a muted state for an ad. */
-    private var isMutedForAd: Boolean = false
 
     // ---- Receivers ----
 
     /** Dynamically registered Spotify broadcast receiver. */
     private val spotifyReceiver = SpotifyReceiver()
 
-    /** Internal receiver for the local broadcasts sent by [SpotifyReceiver]. */
+    /** Internal receiver for the local broadcasts sent by detection sources. */
     private val actionReceiver = ActionReceiver()
 
     // ---- Lifecycle ----
@@ -125,7 +151,8 @@ class MuterService : LifecycleService() {
         prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
         createNotificationChannel()
-        restoreCachedVolumeFromPrefs()
+        // Restore cached volume from prefs in case service was killed while muted
+        cachedVolume.set(prefs.getInt(KEY_CACHED_VOLUME, -1))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -157,21 +184,13 @@ class MuterService : LifecycleService() {
                 }
             }
             ACTION_STOP -> {
-                try {
-                    unregisterReceivers()
-                } catch (_: Exception) { }
-                restoreVolumeIfMuted()
-                persistRunningState(this, false)
-                try {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                } catch (_: Exception) { }
+                // Delegate all cleanup to onDestroy — just request tear-down.
+                Log.d(TAG, "ACTION_STOP received — calling stopSelf()")
                 stopSelf()
-                Log.d(TAG, "Service stopped — receivers unregistered")
             }
         }
         // Use START_NOT_STICKY to prevent Android from restarting the service
-        // after we deliberately stop it. With START_STICKY, calling stopSelf()
-        // would cause an infinite restart loop.
+        // after we deliberately stop it.
         return START_NOT_STICKY
     }
 
@@ -180,10 +199,19 @@ class MuterService : LifecycleService() {
         return null
     }
 
+    /**
+     * Centralized cleanup: no matter how the service stops
+     * (ACTION_STOP, system kill, crash), receivers are unregistered,
+     * volume is restored, and state is persisted.
+     */
     override fun onDestroy() {
+        Log.d(TAG, "onDestroy — cleaning up")
         unregisterReceivers()
         restoreVolumeIfMuted()
         persistRunningState(this, false)
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) { }
         super.onDestroy()
     }
 
@@ -228,10 +256,16 @@ class MuterService : LifecycleService() {
     /**
      * Mutes STREAM_MUSIC by setting volume to 0.
      * Caches the current volume level right before muting.
+     * Thread-safe via [AtomicBoolean] / [AtomicInteger].
+     *
+     * After muting, automatically attempts to skip the ad track by
+     * dispatching KEYCODE_MEDIA_NEXT (and a MediaSession-based fallback).
+     * The volume **always stays muted** regardless of whether the skip
+     * succeeds or fails — volume is only restored by [restoreVolume]
+     * when a normal music track is detected.
      */
-    @Synchronized
     fun muteForAd() {
-        if (isMutedForAd) {
+        if (isMutedForAd.getAndSet(true)) {
             Log.d(TAG, "Already muted for ad — skipping")
             return
         }
@@ -240,39 +274,46 @@ class MuterService : LifecycleService() {
 
         // Only cache if we haven't already or if volume > 0
         if (currentVolume > 0) {
-            cachedVolume = currentVolume
-            prefs.edit().putInt(KEY_CACHED_VOLUME, cachedVolume).apply()
-            Log.d(TAG, "Cached volume=$cachedVolume (max=$maxVolume)")
-        } else if (cachedVolume < 0) {
+            cachedVolume.set(currentVolume)
+            prefs.edit().putInt(KEY_CACHED_VOLUME, currentVolume).apply()
+            Log.d(TAG, "Cached volume=$currentVolume (max=$maxVolume)")
+        } else if (cachedVolume.get() < 0) {
             // If volume is already 0 and we have no cache, use half volume as fallback
-            cachedVolume = (maxVolume * 0.5).toInt().coerceAtLeast(1)
-            prefs.edit().putInt(KEY_CACHED_VOLUME, cachedVolume).apply()
-            Log.d(TAG, "Volume was 0 with no cache — using fallback=$cachedVolume")
+            val fallback = (maxVolume * 0.5).toInt().coerceAtLeast(1)
+            cachedVolume.set(fallback)
+            prefs.edit().putInt(KEY_CACHED_VOLUME, fallback).apply()
+            Log.d(TAG, "Volume was 0 with no cache — using fallback=$fallback")
         }
 
+        // ---- MUTE FIRST (volume always stays muted) ----
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
-        isMutedForAd = true
-        Log.d(TAG, "→ MUTED (cached=$cachedVolume)")
+        Log.d(TAG, "→ MUTED (cached=${cachedVolume.get()})")
 
         updateNotification(true)
+
+        // ---- THEN attempt auto-skip (mute is independent of skip result) ----
+        skipToNextTrack()
     }
 
     /**
      * Restores the cached volume level.
+     * Thread-safe via [AtomicBoolean] / [AtomicInteger].
      */
-    @Synchronized
     fun restoreVolume() {
-        if (!isMutedForAd) {
+        if (!isMutedForAd.getAndSet(false)) {
             Log.d(TAG, "Not muted — skipping restore")
             return
         }
 
-        val volumeToRestore = if (cachedVolume >= 0) {
-            cachedVolume
-        } else {
-            prefs.getInt(KEY_CACHED_VOLUME, -1).let { prefVolume ->
-                if (prefVolume >= 0) prefVolume
-                else (maxVolume * 0.5).toInt().coerceAtLeast(1)
+        val volumeToRestore = cachedVolume.getAndSet(-1).let { vol ->
+            if (vol >= 0) vol
+            else {
+                prefs.getInt(KEY_CACHED_VOLUME, -1).let { prefVolume ->
+                    if (prefVolume >= 0) {
+                        cachedVolume.compareAndSet(-1, prefVolume)
+                        prefVolume
+                    } else (maxVolume * 0.5).toInt().coerceAtLeast(1)
+                }
             }
         }
 
@@ -281,8 +322,6 @@ class MuterService : LifecycleService() {
             volumeToRestore.coerceIn(0, maxVolume),
             0
         )
-        isMutedForAd = false
-        cachedVolume = -1
         prefs.edit().remove(KEY_CACHED_VOLUME).apply()
         Log.d(TAG, "→ VOLUME RESTORED to $volumeToRestore")
 
@@ -290,13 +329,66 @@ class MuterService : LifecycleService() {
     }
 
     private fun restoreVolumeIfMuted() {
-        if (isMutedForAd) {
+        if (isMutedForAd.get()) {
             restoreVolume()
         }
     }
 
-    private fun restoreCachedVolumeFromPrefs() {
-        cachedVolume = prefs.getInt(KEY_CACHED_VOLUME, -1)
+    // ---- Auto-skip (ad dismissal) ----
+
+    /**
+     * Attempts to skip the current (ad) track using two methods:
+     *
+     *  1. **KEYCODE_MEDIA_NEXT** — system-level media key event that
+     *     any media app (including Spotify) responds to.
+     *  2. **MediaSessionManager** — programmatic [MediaController.transportControls.skipToNext]
+     *     targeted specifically at Spotify's session (more precise).
+     *
+     * Both methods are attempted. The skip is rate-limited by [SKIP_COOLDOWN_MS]
+     * to avoid flooding the system with skip requests.
+     *
+     * **Important:** This method does NOT affect volume — the mute state
+     * is managed independently by [muteForAd] / [restoreVolume].
+     */
+    private fun skipToNextTrack() {
+        // ---- Cooldown check ----
+        val now = System.currentTimeMillis()
+        val lastSkip = lastSkipTimestamp.get()
+        if (now - lastSkip < SKIP_COOLDOWN_MS) {
+            Log.d(TAG, "Skip cooldown active — ${SKIP_COOLDOWN_MS - (now - lastSkip)}ms remaining")
+            return
+        }
+        lastSkipTimestamp.set(now)
+
+        // ---- Method 1: KEYCODE_MEDIA_NEXT via AudioManager ----
+        try {
+            audioManager.dispatchMediaKeyEvent(
+                KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT)
+            )
+            audioManager.dispatchMediaKeyEvent(
+                KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT)
+            )
+            Log.d(TAG, "→ Dispatched KEYCODE_MEDIA_NEXT")
+            DebugEventLog.add("[MuterService] KEYCODE_MEDIA_NEXT dispatched")
+        } catch (e: Exception) {
+            Log.d(TAG, "KEYCODE_MEDIA_NEXT failed: ${e.message}")
+        }
+
+        // ---- Method 2: MediaSessionManager skipToNext() ----
+        try {
+            val sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+            val controllers: List<MediaController> = sessionManager.getActiveSessions(null)
+            for (controller in controllers) {
+                if (controller.packageName == "com.spotify.music") {
+                    controller.transportControls.skipToNext()
+                    Log.d(TAG, "→ Called skipToNext() on Spotify MediaController")
+                    DebugEventLog.add("[MuterService] skipToNext() via MediaSessionManager")
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "MediaSession skipToNext() failed: ${e.message}")
+        }
     }
 
     // ---- Notification ----
@@ -350,8 +442,9 @@ class MuterService : LifecycleService() {
     // ---- Internal BroadcastReceiver for action commands ----
 
     /**
-     * Receives the local broadcasts from [SpotifyReceiver] and triggers
-     * mute/restore on [MuterService].
+     * Receives the local broadcasts from [SpotifyReceiver],
+     * [SpotifyNotificationListener], or [MainActivity]'s test button
+     * and triggers mute/restore on [MuterService].
      */
     inner class ActionReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
