@@ -235,7 +235,10 @@ class MuterService : LifecycleService() {
             addAction(SpotifyReceiver.ACTION_MUSIC_DETECTED)
             addAction(SpotifyReceiver.ACTION_NO_METADATA)
         }
-        registerReceiver(actionReceiver, actionFilter, RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(
+            this, actionReceiver, actionFilter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     private fun unregisterReceivers() {
