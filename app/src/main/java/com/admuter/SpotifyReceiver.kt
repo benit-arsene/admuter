@@ -54,10 +54,17 @@ class SpotifyReceiver : BroadcastReceiver() {
          *
          * Detection rules (any **one** being true classifies as an ad):
          *
-         * 1. **ID-based** — `id` starts with `"spotify:ad"` or contains `":ad:"` as a URI segment.
-         * 2. **Track-based** — `track` equals `"Advertisement"` or `"Spotify"` (case-insensitive).
-         * 3. **Artist-based** — `artist` is null / empty / equals `"Spotify"` while `playing` is true.
-         * 4. **Duration-based** — `length` is in (0..30 000] ms AND artist is empty or `"Spotify"`.
+         * 1. **ID-based** — `id` starts with `"spotify:ad"`, `"spotify:advertisement"`
+         *    or contains `":ad:"` as a URI segment.
+         * 2. **Track/Title-based** — `track` equals `"Advertisement"`, exact `"Ad"`
+         *    word, or `"Spotify"` (case-insensitive).
+         * 3. **Blank title while playing** — `track` is blank/empty while `playing`
+         *    is true. Music tracks always have a title; ads often don't.
+         * 4. **Artist-based while playing** — `artist` is blank or equals `"Spotify"`
+         *    while `playing` is true.
+         * 5. **Duration-based** — `length` is in (1..30 000] ms AND artist is blank
+         *    or equals `"Spotify"`, OR length is in that range AND the ID is NOT
+         *    a standard track/episode format.
          */
         @JvmStatic
         fun isAdMetadata(
@@ -68,30 +75,44 @@ class SpotifyReceiver : BroadcastReceiver() {
             length: Int = -1
         ): Boolean {
             // --- Rule 1: ID-based ---
-            if (id.startsWith("spotify:ad") || id.contains(":ad:")) {
+            if (id.startsWith("spotify:ad") || id.startsWith("spotify:advertisement") || id.contains(":ad:")) {
                 DebugEventLog.add("[isAdMetadata] Rule 1 matched: id='$id'")
                 return true
             }
 
-            // --- Rule 2: Track-based ---
+            // --- Rule 2: Track/Title-based ---
             if (track.equals("Advertisement", ignoreCase = true) ||
+                track.equals("Ad", ignoreCase = true) ||
                 track.equals("Spotify", ignoreCase = true)
             ) {
                 DebugEventLog.add("[isAdMetadata] Rule 2 matched: track='$track'")
                 return true
             }
 
-            // --- Rule 3: Artist-based while playing ---
-            val artistIsGeneric = artist.isBlank() || artist.equals("Spotify", ignoreCase = true)
-            if (artistIsGeneric && playing) {
-                DebugEventLog.add("[isAdMetadata] Rule 3 matched: artist='$artist', playing=$playing")
+            // --- Rule 3: Blank title while playing ---
+            if (track.isBlank() && playing) {
+                DebugEventLog.add("[isAdMetadata] Rule 3 matched: blank track, playing=$playing")
                 return true
             }
 
-            // --- Rule 4: Duration-based with generic artist ---
-            if (length in 1..30_000 && artistIsGeneric) {
-                DebugEventLog.add("[isAdMetadata] Rule 4 matched: length=${length}ms, artist='$artist'")
+            // --- Rule 4: Artist-based while playing ---
+            val artistIsGeneric = artist.isBlank() || artist.equals("Spotify", ignoreCase = true)
+            if (artistIsGeneric && playing) {
+                DebugEventLog.add("[isAdMetadata] Rule 4 matched: artist='$artist', playing=$playing")
                 return true
+            }
+
+            // --- Rule 5: Duration-based ---
+            if (length in 1..30_000) {
+                // Match if artist is generic OR ID is not a standard track/episode
+                if (artistIsGeneric) {
+                    DebugEventLog.add("[isAdMetadata] Rule 5a matched: length=${length}ms, artist='$artist'")
+                    return true
+                }
+                if (!id.startsWith("spotify:track:") && !id.startsWith("spotify:episode:")) {
+                    DebugEventLog.add("[isAdMetadata] Rule 5b matched: length=${length}ms, non-track ID='$id'")
+                    return true
+                }
             }
 
             return false
