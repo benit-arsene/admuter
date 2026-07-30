@@ -137,6 +137,17 @@ class MuterService : LifecycleService() {
     /** Timestamp (ms) of the last auto-skip attempt, for cooldown enforcement. */
     private val lastSkipTimestamp = AtomicLong(0L)
 
+    /**
+     * Timestamp of the most recent [ACTION_AD_DETECTED] broadcast.
+     * Used to suppress [ACTION_NO_METADATA]-triggered volume restore for
+     * [NO_METADATA_GRACE_PERIOD_MS] after an ad was detected.
+     *
+     * This prevents the notification-removed event (which fires during
+     * ad transitions) from unmuting the ad while it's still playing.
+     */
+    private val lastAdDetectionTime = AtomicLong(0L)
+    private val NO_METADATA_GRACE_PERIOD_MS = 3000L
+
     private val maxVolume: Int
         get() = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
 
@@ -395,10 +406,11 @@ class MuterService : LifecycleService() {
             }
         } catch (e: SecurityException) {
             // Notification listener permission not granted — can't access all sessions
-            // This is expected if the user hasn't enabled notification access
             Log.d(TAG, "MediaSession monitoring needs notification listener permission: ${e.message}")
+            DebugEventLog.add("[MuterService] MediaSession monitoring failed — need Notification Access permission")
         } catch (e: Exception) {
             Log.d(TAG, "MediaSession monitoring failed: ${e.message}")
+            DebugEventLog.add("[MuterService] MediaSession monitoring error: ${e.message}")
         }
     }
 
@@ -468,8 +480,15 @@ class MuterService : LifecycleService() {
      * when a normal music track is detected.
      */
     fun muteForAd() {
+        // Always extend grace period — even when already muted, this prevents
+        // NO_METADATA from restoring volume while the ad is still playing.
+        // Must be set BEFORE the early return to ensure repeated AD_DETECTED
+        // broadcasts (e.g. heartbeat from SpotifyNotificationListener) keep
+        // extending the grace window.
+        lastAdDetectionTime.set(System.currentTimeMillis())
+
         if (isMutedForAd.getAndSet(true)) {
-            Log.d(TAG, "Already muted for ad — skipping")
+            Log.d(TAG, "Already muted for ad — skipping (grace period extended)")
             return
         }
 
@@ -491,6 +510,7 @@ class MuterService : LifecycleService() {
         // ---- MUTE FIRST (volume always stays muted) ----
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
         Log.d(TAG, "→ MUTED (cached=${cachedVolume.get()})")
+        DebugEventLog.add("[MuterService] MUTED — ad detected, volume set to 0")
 
         updateNotification(true)
 
@@ -651,11 +671,25 @@ class MuterService : LifecycleService() {
      */
     inner class ActionReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
+            val action = intent.action ?: return
+            Log.d(TAG, "ActionReceiver received: $action")
+            DebugEventLog.add("[MuterService] Received broadcast: $action")
+
+            when (action) {
                 SpotifyReceiver.ACTION_AD_DETECTED -> muteForAd()
                 SpotifyReceiver.ACTION_MUSIC_DETECTED -> restoreVolume()
                 SpotifyReceiver.ACTION_NO_METADATA -> {
-                    // When playback stops entirely, restore volume if muted
+                    // ---- Grace period: don't restore if ad was just detected ----
+                    // During ad transitions, the notification gets removed and
+                    // NO_METADATA fires. If we restored volume here, the ad would
+                    // become audible. Skip the restore if an ad was detected within
+                    // the grace period.
+                    val timeSinceAd = System.currentTimeMillis() - lastAdDetectionTime.get()
+                    if (timeSinceAd < NO_METADATA_GRACE_PERIOD_MS) {
+                        Log.d(TAG, "NO_METADATA suppressed — ad detected ${timeSinceAd}ms ago (grace period=${NO_METADATA_GRACE_PERIOD_MS}ms)")
+                        DebugEventLog.add("[MuterService] NO_METADATA suppressed — ad was ${timeSinceAd}ms ago")
+                        return
+                    }
                     restoreVolume()
                 }
             }
