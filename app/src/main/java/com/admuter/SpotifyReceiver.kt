@@ -178,7 +178,7 @@ class SpotifyReceiver : BroadcastReceiver() {
     }
 
     // ---------------------------------------------------------------
-    //  Ad-classification logic
+    //  Ad-classification logic  (companion — reused by MuterService)
     // ---------------------------------------------------------------
 
     /**
@@ -186,12 +186,13 @@ class SpotifyReceiver : BroadcastReceiver() {
      *
      * Detection rules (any **one** being true classifies as an ad):
      *
-     * 1. **ID-based** — `id` starts with `"spotify:ad:"` or contains `":ad:"` as a URI segment.
+     * 1. **ID-based** — `id` starts with `"spotify:ad"` or contains `":ad:"` as a URI segment.
      * 2. **Track-based** — `track` equals `"Advertisement"` or `"Spotify"` (case-insensitive).
      * 3. **Artist-based** — `artist` is null / empty / equals `"Spotify"` while `playing` is true.
      * 4. **Duration-based** — `length` is in (0..30 000] ms AND artist is empty or `"Spotify"`.
      */
-    internal fun isAdMetadata(
+    @JvmStatic
+    fun isAdMetadata(
         id: String,
         artist: String,
         track: String,

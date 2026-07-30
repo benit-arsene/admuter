@@ -108,7 +108,7 @@ class SpotifyNotificationListener : NotificationListenerService() {
         Log.d(TAG, "Spotify notification — title=\"$title\", info=\"$info\"")
         DebugEventLog.add("[SpotifyNotificationListener] title=\"$title\" info=\"$info\"")
 
-        val isAd = isAdNotification(title, info)
+        val isAd = isAdNotification(notification, title, info)
 
         val intentAction = if (isAd) {
             Log.d(TAG, "→ Ad detected from notification")
@@ -202,11 +202,25 @@ class SpotifyNotificationListener : NotificationListenerService() {
         }
     }
 
-    private fun isAdNotification(title: String, info: String): Boolean {
+    private fun isAdNotification(notification: Notification, title: String, info: String): Boolean {
+        // ---- Exact matches (most common ad patterns) ----
         if (title.equals("Advertisement", ignoreCase = true)) return true
         if (info.equals("Advertisement", ignoreCase = true)) return true
         if (title.equals("Ad", ignoreCase = true)) return true
         if (info.equals("Ad", ignoreCase = true)) return true
+
+        // ---- Partial content matches ----
+        if (info.contains(Regex("\\badvertisement\\b", RegexOption.IGNORE_CASE)) ||
+            info.contains(Regex("\\bsponsored\\b", RegexOption.IGNORE_CASE))
+        ) return true
+
+        // ---- Title is just "Spotify" with no artist → likely an ad ----
+        if (title.equals("Spotify", ignoreCase = true)) {
+            val extras = notification.extras
+            val artist = extras?.getString(Notification.EXTRA_SUB_TEXT, "") ?: ""
+            if (artist.isBlank()) return true
+        }
+
         return false
     }
 }
