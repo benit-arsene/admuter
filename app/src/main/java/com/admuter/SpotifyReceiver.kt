@@ -48,6 +48,54 @@ class SpotifyReceiver : BroadcastReceiver() {
         const val ACTION_AD_DETECTED = "com.admuter.ACTION_AD_DETECTED"
         const val ACTION_MUSIC_DETECTED = "com.admuter.ACTION_MUSIC_DETECTED"
         const val ACTION_NO_METADATA = "com.admuter.ACTION_NO_METADATA"
+
+        /**
+         * Determines whether the given metadata corresponds to a Spotify ad.
+         *
+         * Detection rules (any **one** being true classifies as an ad):
+         *
+         * 1. **ID-based** — `id` starts with `"spotify:ad"` or contains `":ad:"` as a URI segment.
+         * 2. **Track-based** — `track` equals `"Advertisement"` or `"Spotify"` (case-insensitive).
+         * 3. **Artist-based** — `artist` is null / empty / equals `"Spotify"` while `playing` is true.
+         * 4. **Duration-based** — `length` is in (0..30 000] ms AND artist is empty or `"Spotify"`.
+         */
+        @JvmStatic
+        fun isAdMetadata(
+            id: String,
+            artist: String,
+            track: String,
+            playing: Boolean,
+            length: Int = -1
+        ): Boolean {
+            // --- Rule 1: ID-based ---
+            if (id.startsWith("spotify:ad") || id.contains(":ad:")) {
+                DebugEventLog.add("[isAdMetadata] Rule 1 matched: id='$id'")
+                return true
+            }
+
+            // --- Rule 2: Track-based ---
+            if (track.equals("Advertisement", ignoreCase = true) ||
+                track.equals("Spotify", ignoreCase = true)
+            ) {
+                DebugEventLog.add("[isAdMetadata] Rule 2 matched: track='$track'")
+                return true
+            }
+
+            // --- Rule 3: Artist-based while playing ---
+            val artistIsGeneric = artist.isBlank() || artist.equals("Spotify", ignoreCase = true)
+            if (artistIsGeneric && playing) {
+                DebugEventLog.add("[isAdMetadata] Rule 3 matched: artist='$artist', playing=$playing")
+                return true
+            }
+
+            // --- Rule 4: Duration-based with generic artist ---
+            if (length in 1..30_000 && artistIsGeneric) {
+                DebugEventLog.add("[isAdMetadata] Rule 4 matched: length=${length}ms, artist='$artist'")
+                return true
+            }
+
+            return false
+        }
     }
 
     // ---- Debounce cache ----
@@ -175,58 +223,6 @@ class SpotifyReceiver : BroadcastReceiver() {
             Log.d(TAG, "→ Playing, but no metadata yet — waiting for METADATA_CHANGED")
             DebugEventLog.add("[SpotifyReceiver] → Playing, no metadata yet")
         }
-    }
-
-    // ---------------------------------------------------------------
-    //  Ad-classification logic  (companion — reused by MuterService)
-    // ---------------------------------------------------------------
-
-    /**
-     * Determines whether the given metadata corresponds to a Spotify ad.
-     *
-     * Detection rules (any **one** being true classifies as an ad):
-     *
-     * 1. **ID-based** — `id` starts with `"spotify:ad"` or contains `":ad:"` as a URI segment.
-     * 2. **Track-based** — `track` equals `"Advertisement"` or `"Spotify"` (case-insensitive).
-     * 3. **Artist-based** — `artist` is null / empty / equals `"Spotify"` while `playing` is true.
-     * 4. **Duration-based** — `length` is in (0..30 000] ms AND artist is empty or `"Spotify"`.
-     */
-    @JvmStatic
-    fun isAdMetadata(
-        id: String,
-        artist: String,
-        track: String,
-        playing: Boolean,
-        length: Int = -1
-    ): Boolean {
-        // --- Rule 1: ID-based ---
-        if (id.startsWith("spotify:ad") || id.contains(":ad:")) {
-            DebugEventLog.add("[isAdMetadata] Rule 1 matched: id='$id'")
-            return true
-        }
-
-        // --- Rule 2: Track-based ---
-        if (track.equals("Advertisement", ignoreCase = true) ||
-            track.equals("Spotify", ignoreCase = true)
-        ) {
-            DebugEventLog.add("[isAdMetadata] Rule 2 matched: track='$track'")
-            return true
-        }
-
-        // --- Rule 3: Artist-based while playing ---
-        val artistIsGeneric = artist.isBlank() || artist.equals("Spotify", ignoreCase = true)
-        if (artistIsGeneric && playing) {
-            DebugEventLog.add("[isAdMetadata] Rule 3 matched: artist='$artist', playing=$playing")
-            return true
-        }
-
-        // --- Rule 4: Duration-based with generic artist ---
-        if (length in 1..30_000 && artistIsGeneric) {
-            DebugEventLog.add("[isAdMetadata] Rule 4 matched: length=${length}ms, artist='$artist'")
-            return true
-        }
-
-        return false
     }
 
     // ---------------------------------------------------------------
