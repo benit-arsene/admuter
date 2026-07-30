@@ -11,13 +11,8 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
-import android.media.MediaMetadata
-import android.media.session.MediaController
-import android.media.session.MediaSessionManager
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
@@ -29,16 +24,21 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Foreground Service that:
- *  1. **Primary:** Monitors Spotify's [MediaSession] metadata via [MediaSessionManager]
- *     to detect ads in real-time — the most reliable modern method.
- *  2. **Fallback:** Registers [SpotifyReceiver] dynamically (for Spotify's deprecated
- *     broadcast intents — may not work on modern Spotify).
- *  3. **Fallback:** Registers an internal [ActionReceiver] to receive local broadcasts
- *     from [SpotifyReceiver], [SpotifyNotificationListener], or [MainActivity] (test).
- *  4. Uses [AudioManager] to mute STREAM_MUSIC when an ad is detected and
+ *  1. Registers [SpotifyReceiver] dynamically (for Spotify's deprecated
+ *     broadcast intents — may still work on some Spotify versions).
+ *  2. Registers an internal [ActionReceiver] to receive local broadcasts
+ *     from [SpotifyNotificationListener], [SpotifyReceiver], or
+ *     [MainActivity] (test button).
+ *  3. Uses [AudioManager] to mute STREAM_MUSIC when an ad is detected and
  *     restores the cached volume when normal music resumes.
- *  5. Automatically dispatches a "skip"/next-track command when an ad is
+ *  4. Automatically dispatches a "skip"/next-track command when an ad is
  *     detected, so the ad is dismissed as well as muted.
+ *
+ * ## Ad detection is handled by [SpotifyNotificationListener]
+ * The heavy lifting of detecting ads via MediaSession metadata is done by
+ * [SpotifyNotificationListener] (a [NotificationListenerService]). It sends
+ * [SpotifyReceiver.ACTION_AD_DETECTED] / [SpotifyReceiver.ACTION_MUSIC_DETECTED]
+ * broadcasts that [ActionReceiver] picks up.
  *
  * ## Thread safety
  * All mutable shared state ([isMutedForAd], [cachedVolume], [lastSkipTimestamp])
@@ -47,8 +47,8 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ## Clean lifecycle
  *  - [ACTION_STOP] simply calls [stopSelf]; all cleanup (receiver
- *    unregistration, MediaSession teardown, volume restoration,
- *    state persistence) happens in [onDestroy].
+ *    unregistration, volume restoration, state persistence) happens
+ *    in [onDestroy].
  *  - [MainActivity] never speculatively sets the running state —
  *    it reads [isRunning] from the in-memory flag, which is only
  *    updated by the service itself.
@@ -159,54 +159,6 @@ class MuterService : LifecycleService() {
     /** Internal receiver for the local broadcasts sent by detection sources. */
     private val actionReceiver = ActionReceiver()
 
-    // ---- MediaSession monitoring (primary detection) ----
-
-    /**
-     * MediaController for Spotify's active media session.
-     * Used to register a callback for real-time metadata changes.
-     */
-    private var spotifyController: MediaController? = null
-
-    /** Debounce: prevent rapid re-processing of the same track. */
-    @Volatile
-    private var lastMediaSessionTrackId: String? = null
-    @Volatile
-    private var lastMediaSessionProcessTime: Long = 0L
-    private val mediaSessionDebounceMs = 1000L
-
-    /** Periodic polling interval (ms) to re-establish session monitoring. */
-    private val MONITORING_INTERVAL_MS = 3000L
-
-    /** Handler on the main thread for periodic polling. */
-    private val monitoringHandler = Handler(Looper.getMainLooper())
-
-    /**
-     * Callback that receives real-time metadata changes from Spotify's media session.
-     * This is the primary ad-detection path on modern Spotify versions.
-     */
-    private val mediaSessionCallback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) {
-            if (metadata != null) {
-                processMediaSessionMetadata(metadata)
-            }
-        }
-
-        override fun onSessionDestroyed() {
-            Log.d(TAG, "MediaSession for Spotify destroyed — will re-establish on next poll")
-            DebugEventLog.add("[MuterService] MediaSession destroyed — will re-connect")
-            spotifyController?.unregisterCallback(this)
-            spotifyController = null
-        }
-    }
-
-    /** Periodic polling runnable that checks for Spotify's media session. */
-    private val pollRunnable = object : Runnable {
-        override fun run() {
-            findAndMonitorSpotifySession()
-            monitoringHandler.postDelayed(this, MONITORING_INTERVAL_MS)
-        }
-    }
-
     // ---- Lifecycle ----
 
     override fun onCreate() {
@@ -237,9 +189,8 @@ class MuterService : LifecycleService() {
                         startForeground(NOTIFICATION_ID, notification)
                     }
                     registerReceivers()
-                    startMediaSessionMonitoring()
                     persistRunningState(this, true)
-                    Log.d(TAG, "Service started — receivers + MediaSession monitoring active")
+                    Log.d(TAG, "Service started — waiting for broadcasts from SpotifyNotificationListener")
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed to start foreground service: ${t.message}", t)
                     // Record crash for diagnostics (use commit() to ensure it persists)
@@ -276,7 +227,6 @@ class MuterService : LifecycleService() {
      */
     override fun onDestroy() {
         Log.d(TAG, "onDestroy — cleaning up")
-        stopMediaSessionMonitoring()
         unregisterReceivers()
         restoreVolumeIfMuted()
         persistRunningState(this, false)
@@ -322,147 +272,6 @@ class MuterService : LifecycleService() {
             unregisterReceiver(actionReceiver)
         } catch (_: IllegalArgumentException) {
             // Receiver was not registered
-        }
-    }
-
-    // ---- MediaSession monitoring (primary ad detection) ----
-
-    /**
-     * Starts the MediaSession monitoring system:
-     *  - Does an immediate check for Spotify's session
-     *  - Begins periodic polling to re-connect if the session changes or is destroyed
-     *
-     * This is the **primary** ad-detection mechanism on modern Spotify.
-     * It doesn't depend on deprecated Spotify broadcasts or notification text matching.
-     */
-    private fun startMediaSessionMonitoring() {
-        Log.d(TAG, "Starting MediaSession monitoring")
-        DebugEventLog.add("[MuterService] Starting MediaSession monitoring")
-
-        // Immediate first check
-        findAndMonitorSpotifySession()
-
-        // Begin periodic polling to handle re-connection and session changes
-        monitoringHandler.postDelayed(pollRunnable, MONITORING_INTERVAL_MS)
-    }
-
-    /**
-     * Stops the MediaSession monitoring system:
-     *  - Removes the periodic poll
-     *  - Unregisters the callback
-     *  - Clears the controller reference
-     */
-    private fun stopMediaSessionMonitoring() {
-        monitoringHandler.removeCallbacks(pollRunnable)
-        spotifyController?.unregisterCallback(mediaSessionCallback)
-        spotifyController = null
-        Log.d(TAG, "MediaSession monitoring stopped")
-    }
-
-    /**
-     * Queries [MediaSessionManager] for active sessions, finds Spotify's session,
-     * and registers the [mediaSessionCallback] on it.
-     *
-     * If the session is already being monitored (same controller), this is a no-op.
-     * If the session has changed, the old callback is unregistered and the new one
-     * is registered.
-     *
-     * Requires [android.Manifest.permission.BIND_NOTIFICATION_LISTENER_SERVICE] on
-     * Android 11+ — silently falls back if permission is not granted.
-     */
-    private fun findAndMonitorSpotifySession() {
-        try {
-            val sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-            val controllers: List<MediaController> = sessionManager.getActiveSessions(null)
-
-            for (controller in controllers) {
-                if (controller.packageName == "com.spotify.music") {
-                    // Found Spotify's session — register callback if not already doing so
-                    if (spotifyController != controller) {
-                        // Unregister from old controller
-                        spotifyController?.unregisterCallback(mediaSessionCallback)
-                        // Register on the new one
-                        spotifyController = controller
-                        controller.registerCallback(mediaSessionCallback)
-                        Log.d(TAG, "MediaSession monitoring active for Spotify")
-                        DebugEventLog.add("[MuterService] MediaSession monitoring active for Spotify")
-
-                        // Process current metadata immediately so we don't miss the
-                        // currently-playing track
-                        val currentMetadata = controller.metadata
-                        if (currentMetadata != null) {
-                            processMediaSessionMetadata(currentMetadata)
-                        }
-                    }
-                    return
-                }
-            }
-
-            // Spotify session not found — clear stale reference
-            if (spotifyController != null) {
-                spotifyController?.unregisterCallback(mediaSessionCallback)
-                spotifyController = null
-                Log.d(TAG, "Spotify MediaSession not found — will retry on next poll")
-            }
-        } catch (e: SecurityException) {
-            // Notification listener permission not granted — can't access all sessions
-            Log.d(TAG, "MediaSession monitoring needs notification listener permission: ${e.message}")
-            DebugEventLog.add("[MuterService] MediaSession monitoring failed — need Notification Access permission")
-        } catch (e: Exception) {
-            Log.d(TAG, "MediaSession monitoring failed: ${e.message}")
-            DebugEventLog.add("[MuterService] MediaSession monitoring error: ${e.message}")
-        }
-    }
-
-    /**
-     * Processes a [MediaMetadata] update from Spotify's media session.
-     *
-     * Classifies the track as ad or music using [SpotifyReceiver.isAdMetadata]
-     * and triggers mute or restore accordingly.
-     *
-     * Includes debounce to prevent rapid re-processing of the same track.
-     */
-    private fun processMediaSessionMetadata(metadata: MediaMetadata) {
-        val id = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID) ?: ""
-        val artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
-        val track = metadata.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
-        val duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
-
-        val logLine = "MediaSession | ID=$id | Artist=\"$artist\" | Track=\"$track\" | Duration=${duration}ms"
-        Log.d(TAG, logLine)
-        DebugEventLog.add("[MediaSession] $logLine")
-
-        // Empty metadata → playback stopped or no track — restore volume
-        if (id.isEmpty() && artist.isEmpty() && track.isEmpty()) {
-            Log.d(TAG, "→ Empty metadata, restoring volume")
-            restoreVolume()
-            return
-        }
-
-        // Debounce: skip if same track within the debounce window
-        val now = System.currentTimeMillis()
-        if (id == lastMediaSessionTrackId && (now - lastMediaSessionProcessTime) < mediaSessionDebounceMs) {
-            Log.d(TAG, "MediaSession debounced duplicate track: $id")
-            return
-        }
-        lastMediaSessionTrackId = id
-        lastMediaSessionProcessTime = now
-
-        // Classify using the same robust logic as SpotifyReceiver
-        val isAd = SpotifyReceiver.isAdMetadata(
-            id, artist, track,
-            playing = true,
-            length = if (duration > 0) duration.toInt() else -1
-        )
-
-        if (isAd) {
-            Log.d(TAG, "→ AD detected via MediaSession")
-            DebugEventLog.add("[MediaSession] → AD detected")
-            muteForAd() // ← calls skipToNextTrack() internally
-        } else {
-            Log.d(TAG, "→ Music detected via MediaSession")
-            DebugEventLog.add("[MediaSession] → Music detected, restoring volume")
-            restoreVolume()
         }
     }
 
@@ -560,21 +369,16 @@ class MuterService : LifecycleService() {
     // ---- Auto-skip (ad dismissal) ----
 
     /**
-     * Attempts to skip the current (ad) track using two methods:
+     * Attempts to skip the current (ad) track by dispatching
+     * [KeyEvent.KEYCODE_MEDIA_NEXT] at the system level, which
+     * any media app (including Spotify) responds to.
      *
-     *  1. **KEYCODE_MEDIA_NEXT** — system-level media key event that
-     *     any media app (including Spotify) responds to.
-     *  2. **MediaSessionManager** — programmatic [MediaController.transportControls.skipToNext]
-     *     targeted specifically at Spotify's session (more precise).
-     *
-     * Both methods are attempted. The skip is rate-limited by [SKIP_COOLDOWN_MS]
-     * to avoid flooding the system with skip requests.
+     * Rate-limited by [SKIP_COOLDOWN_MS] to avoid flooding the system.
      *
      * **Important:** This method does NOT affect volume — the mute state
      * is managed independently by [muteForAd] / [restoreVolume].
      */
     private fun skipToNextTrack() {
-        // ---- Cooldown check ----
         val now = System.currentTimeMillis()
         val lastSkip = lastSkipTimestamp.get()
         if (now - lastSkip < SKIP_COOLDOWN_MS) {
@@ -583,7 +387,6 @@ class MuterService : LifecycleService() {
         }
         lastSkipTimestamp.set(now)
 
-        // ---- Method 1: KEYCODE_MEDIA_NEXT via AudioManager ----
         try {
             audioManager.dispatchMediaKeyEvent(
                 KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT)
@@ -595,22 +398,6 @@ class MuterService : LifecycleService() {
             DebugEventLog.add("[MuterService] KEYCODE_MEDIA_NEXT dispatched")
         } catch (e: Exception) {
             Log.d(TAG, "KEYCODE_MEDIA_NEXT failed: ${e.message}")
-        }
-
-        // ---- Method 2: MediaSessionManager skipToNext() ----
-        try {
-            val sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-            val controllers: List<MediaController> = sessionManager.getActiveSessions(null)
-            for (controller in controllers) {
-                if (controller.packageName == "com.spotify.music") {
-                    controller.transportControls.skipToNext()
-                    Log.d(TAG, "→ Called skipToNext() on Spotify MediaController")
-                    DebugEventLog.add("[MuterService] skipToNext() via MediaSessionManager")
-                    break
-                }
-            }
-        } catch (e: Exception) {
-            Log.d(TAG, "MediaSession skipToNext() failed: ${e.message}")
         }
     }
 
