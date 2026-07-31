@@ -1,24 +1,19 @@
 package com.admuter
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
-import android.widget.TextView
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.admuter.databinding.ActivityMainBinding
+import com.admuter.databinding.ActivityMainMinimalBinding
 
 /**
  * Single-activity UI for AdMuter.
@@ -28,7 +23,7 @@ import com.admuter.databinding.ActivityMainBinding
  * Shows setup instructions for both detection methods:
  *   1. NotificationListenerService (reliable, needs system settings)
  *   2. Spotify Broadcast (needs Device Broadcast Status in Spotify)
- * Includes a test button to verify ad muting works.
+ * The debug screen ([DebugLogActivity]) hosts the ad-simulation test button.
  *
  * ## Key design decisions
  *  - The Activity NEVER speculatively sets the service running state.
@@ -38,11 +33,17 @@ import com.admuter.databinding.ActivityMainBinding
  *    but [onResume] corrects any mismatch with the actual service state.
  *  - A guard flag prevents the switch's [OnCheckedChangeListener] from
  *    re-triggering service start/stop when [updateUi] programmatically changes it.
+ *  - The setup instructions section is hidden (GONE) as soon as notification
+ *    access is granted, keeping the dashboard minimal.
+ *
+ * ## Layout
+ *  Drives `activity_main_minimal.xml` ([ActivityMainMinimalBinding]). The
+ *  original `activity_main.xml` is preserved untouched for safe rollback —
+ *  switching back only requires re-pointing this Activity at it.
  */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var binding: ActivityMainBinding
-    private lateinit var audioManager: AudioManager
+    private lateinit var binding: ActivityMainMinimalBinding
 
     /**
      * Prevents recursive calls when [updateUi] programmatically changes
@@ -50,6 +51,9 @@ class MainActivity : AppCompatActivity() {
      * [OnCheckedChangeListener] and re-trigger service start/stop.
      */
     private var ignoreSwitchChange = false
+
+    /** Tracks whether the setup-instructions body is expanded or collapsed. */
+    private var setupExpanded = true
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -71,14 +75,13 @@ class MainActivity : AppCompatActivity() {
         try {
             super.onCreate(savedInstanceState)
             enableEdgeToEdge()
-            binding = ActivityMainBinding.inflate(layoutInflater)
+            binding = ActivityMainMinimalBinding.inflate(layoutInflater)
             setContentView(binding.root)
-
-            audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
 
             checkForCrash()
             checkSpotifyInstalled()
             updateDetectionStatus()
+            updateSetupVisibility()
             setupViews()
             // Initial UI render from persisted state — does NOT rely on
             // pre-set runningState; queries the service's own in-memory flag.
@@ -86,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         } catch (t: Throwable) {
             try {
                 val prefs = getSharedPreferences("admuter_prefs", MODE_PRIVATE)
-                val stackTrace = Log.getStackTraceString(t)
+                val stackTrace = android.util.Log.getStackTraceString(t)
                 val msg = t.message ?: "(no message)"
                 prefs.edit()
                     .putString("last_crash", "${t.javaClass.simpleName}: $msg\n$stackTrace")
@@ -106,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         updateUi(isRunning)
         checkSpotifyInstalled()
         updateDetectionStatus()
+        updateSetupVisibility()
     }
 
     // ---------------------------------------------------------------
@@ -127,7 +131,7 @@ class MainActivity : AppCompatActivity() {
         // Switch label & status header
         if (isRunning) {
             binding.switchEnable.text = "Ad Muting Enabled"
-            binding.statusText.text = "Service is running"
+            binding.statusText.text = "Service is Running"
             binding.statusIcon.setImageResource(R.drawable.ic_mute)
             binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
                 getColor(R.color.spotify_green)
@@ -135,7 +139,7 @@ class MainActivity : AppCompatActivity() {
             binding.statusIcon.alpha = 1.0f
         } else {
             binding.switchEnable.text = "Enable Ad Muting"
-            binding.statusText.text = "Service is stopped"
+            binding.statusText.text = "Service Stopped"
             binding.statusIcon.setImageResource(R.drawable.ic_mute)
             binding.statusIcon.imageTintList = android.content.res.ColorStateList.valueOf(
                 android.graphics.Color.WHITE
@@ -157,9 +161,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.spotifyStatusText.text = if (isInstalled) {
-            "Spotify: installed"
+            "Spotify Installed"
         } else {
-            "Spotify: not installed — install Spotify to use this app"
+            "Spotify Not Installed — install Spotify to use this app"
         }
 
         binding.spotifyStatusText.setCompoundDrawablesRelativeWithIntrinsicBounds(
@@ -176,13 +180,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateDetectionStatus() {
         val nlsEnabled = isNotificationListenerEnabled()
 
-        val text = if (nlsEnabled) {
-            "Notification Access: Enabled — ads will be detected"
+        binding.detectionStatusText.text = if (nlsEnabled) {
+            "Notification Access Granted"
         } else {
-            "Notification Access: Not enabled — enable via setup guide below"
+            "Notification Access Not Granted — enable via setup guide below"
         }
 
-        binding.detectionStatusText.text = text
         binding.detectionStatusText.setCompoundDrawablesRelativeWithIntrinsicBounds(
             if (nlsEnabled) R.drawable.ic_check else R.drawable.ic_close,
             0, 0, 0
@@ -192,6 +195,14 @@ class MainActivity : AppCompatActivity() {
             else android.graphics.Color.parseColor("#FFFF4444")
         )
     }
+
+    /**
+     * Whether ad-detection permission is active. The setup instructions
+     * teach how to enable notification access, so "permission granted"
+     * here means the [SpotifyNotificationListener] is enabled in system
+     * settings (this is the permission that actually powers ad detection).
+     */
+    private fun isNotificationPermissionGranted(): Boolean = isNotificationListenerEnabled()
 
     private fun isNotificationListenerEnabled(): Boolean {
         return try {
@@ -205,6 +216,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Hides the entire setup section when notification access has been
+     * granted (clears visual noise), and shows it otherwise. The collapsible
+     * body is only reset to its expanded state when the section transitions
+     * from hidden to shown (e.g. permission newly revoked) — a manual
+     * collapse by the user is otherwise preserved across onResume.
+     */
+    private fun updateSetupVisibility() {
+        if (isNotificationPermissionGranted()) {
+            binding.layoutSetupInstructions.visibility = View.GONE
+        } else {
+            val wasHidden = binding.layoutSetupInstructions.visibility != View.VISIBLE
+            binding.layoutSetupInstructions.visibility = View.VISIBLE
+            if (wasHidden) {
+                setupExpanded = true
+                binding.layoutSetupBody.visibility = View.VISIBLE
+                binding.setupHeader.text = "Setup Instructions  ▾"
+            }
+        }
+    }
+
     // ---------------------------------------------------------------
     //  Crash diagnostics
     // ---------------------------------------------------------------
@@ -214,7 +246,7 @@ class MainActivity : AppCompatActivity() {
         if (crashInfo != null) {
             val shortMsg = crashInfo.take(500)
             binding.crashInfoText.text = "Previous crash: $shortMsg"
-            binding.crashInfoText.visibility = android.view.View.VISIBLE
+            binding.crashInfoText.visibility = View.VISIBLE
             MuterService.clearCrashInfo(this)
         }
     }
@@ -238,9 +270,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Test button: simulate ad detection to verify muting works
-        binding.btnTestAd.setOnClickListener {
-            testAdDetection()
+        // Top-right log icon → dedicated Debug Logs screen
+        binding.btnDebugLogs.setOnClickListener {
+            startActivity(Intent(this, DebugLogActivity::class.java))
+        }
+
+        // Collapsible setup section (only interactive while visible)
+        binding.setupHeader.setOnClickListener {
+            setupExpanded = !setupExpanded
+            binding.layoutSetupBody.visibility =
+                if (setupExpanded) View.VISIBLE else View.GONE
+            binding.setupHeader.text =
+                if (setupExpanded) "Setup Instructions  ▾" else "Setup Instructions  ▸"
         }
 
         // Open Notification Access settings (Method 1)
@@ -290,79 +331,6 @@ class MainActivity : AppCompatActivity() {
                 ).show()
             }
         }
-
-        // View Debug Log button
-        binding.btnViewLog.setOnClickListener {
-            showDebugLogDialog()
-        }
-    }
-
-    // ---------------------------------------------------------------
-    //  Debug Log Dialog
-    // ---------------------------------------------------------------
-
-    private fun showDebugLogDialog() {
-        val logText = DebugEventLog.getText().ifEmpty { "(No events captured yet)" }
-
-        val logView = TextView(this).apply {
-            text = logText
-            textSize = 10f
-            setTextColor(android.graphics.Color.parseColor("#CCFFFFFF"))
-            setBackgroundColor(android.graphics.Color.parseColor("#FF1A1A2E"))
-            setPadding(16, 16, 16, 16)
-            setLineSpacing(4f, 1f)
-            typeface = android.graphics.Typeface.MONOSPACE
-            movementMethod = android.text.method.ScrollingMovementMethod()
-            setHeight(resources.displayMetrics.density.let { d -> (400 * d).toInt() })
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Debug Event Log")
-            .setView(logView)
-            .setPositiveButton("Copy") { _, _ ->
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-                clipboard.setPrimaryClip(ClipData.newPlainText("AdMuter Debug Log", logText))
-                Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show()
-            }
-            .setNeutralButton("Clear") { _, _ ->
-                DebugEventLog.clear()
-                Toast.makeText(this, "Log cleared", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Close", null)
-            .setCancelable(true)
-            .show()
-    }
-
-    // ---------------------------------------------------------------
-    //  Test Ad Detection
-    // ---------------------------------------------------------------
-
-    private fun testAdDetection() {
-        if (!isServiceRunning()) {
-            Toast.makeText(
-                this,
-                "Please start the service first by flipping the switch",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-
-        // Send an AD_DETECTED broadcast to MuterService directly
-        val testIntent = Intent().apply {
-            `package` = packageName
-            action = SpotifyReceiver.ACTION_AD_DETECTED
-        }
-        sendBroadcast(testIntent)
-
-        Toast.makeText(
-            this,
-            "Test ad detection sent. Volume should go to 0.\nToggle the switch to restore volume.",
-            Toast.LENGTH_LONG
-        ).show()
-
-        Log.d("AdMuter", "Test ad detection sent — current volume was $currentVolume")
     }
 
     // ---------------------------------------------------------------

@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Minimalist dashboard for AdMuter.
+
+    NOTE: This layout intentionally mirrors the view IDs used by the original
+    activity_main.xml (statusIcon, statusText, switchEnable, spotifyStatusText,
+    detectionStatusText, crashInfoText, layoutSetupInstructions, btnNotificationSettings,
+    btnOpenSpotify) so MainActivity can drive it with identical logic.
+    The original activity_main.xml is preserved untouched for safe rollback.
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/dark_background"
+    android:fillViewport="true"
+    android:fitsSystemWindows="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="16dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="28dp">
+
+        <!-- ════════════════════════════════════════════════════════════
+             Top Action Bar
+             ════════════════════════════════════════════════════════════ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/appTitle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:letterSpacing="0.03"
+                android:text="@string/app_name"
+                android:textColor="@android:color/white"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <!-- Debug Logs (top-right icon) -->
+            <ImageButton
+                android:id="@+id/btnDebugLogs"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Debug Logs"
+                android:padding="10dp"
+                android:src="@drawable/ic_list"
+                app:tint="@android:color/white" />
+        </LinearLayout>
+
+        <!-- ════════════════════════════════════════════════════════════
+             Hero Section
+             ════════════════════════════════════════════════════════════ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <ImageView
+                android:id="@+id/statusIcon"
+                android:layout_width="96dp"
+                android:layout_height="96dp"
+                android:alpha="0.6"
+                android:contentDescription="@string/app_name"
+                android:src="@drawable/ic_mute" />
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="Service is stopped"
+                android:textColor="@android:color/white"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- ════════════════════════════════════════════════════════════
+             Main Switch Card
+             ════════════════════════════════════════════════════════════ -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            app:cardBackgroundColor="#FF1A1A1E"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#26FFFFFF"
+            app:strokeWidth="1dp">
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchEnable"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="false"
+                android:minHeight="64dp"
+                android:paddingHorizontal="20dp"
+                android:paddingVertical="12dp"
+                android:text="@string/toggle_label"
+                android:textColor="@android:color/white"
+                android:textSize="16sp" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- Crash Info (only shown after a previous crash) -->
+        <TextView
+            android:id="@+id/crashInfoText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#33FF4444"
+            android:padding="12dp"
+            android:textColor="#FFFF4444"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
+        <!-- ════════════════════════════════════════════════════════════
+             System Status Card
+             ════════════════════════════════════════════════════════════ -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            app:cardBackgroundColor="#FF1A1A1E"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#26FFFFFF"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="20dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.12"
+                    android:text="SYSTEM STATUS"
+                    android:textColor="#80FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/spotifyStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:drawableStart="@drawable/ic_check"
+                    android:drawablePadding="10dp"
+                    android:text="Spotify Installed"
+                    android:textColor="@color/spotify_green"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/detectionStatusText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:drawableStart="@drawable/ic_check"
+                    android:drawablePadding="10dp"
+                    android:text="Notification Access Granted"
+                    android:textColor="@color/spotify_green"
+                    android:textSize="14sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- ════════════════════════════════════════════════════════════
+             Collapsible Setup Instructions
+             Defaults to GONE; MainActivity makes it VISIBLE only when the
+             user has not yet granted notification access.
+             ════════════════════════════════════════════════════════════ -->
+        <LinearLayout
+            android:id="@+id/layoutSetupInstructions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- Collapsible header (tap to expand/collapse methods) -->
+            <TextView
+                android:id="@+id/setupHeader"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:drawableStart="@drawable/ic_bell"
+                android:drawablePadding="8dp"
+                android:padding="8dp"
+                android:text="Setup Instructions  ▾"
+                android:textColor="@color/spotify_green"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:id="@+id/layoutSetupBody"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="12dp">
+
+                <!-- Method 1: Notification Access -->
+                <TextView
+                    android:id="@+id/method1Title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="Method 1: Notification Access"
+                    android:textColor="@color/spotify_green"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/method1Desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Settings > Apps > Special Access > Notification Access > Enable AdMuter"
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/btnNotificationSettings"
+                    android:layout_width="match_parent"
+                    android:layout_height="38dp"
+                    android:layout_marginTop="8dp"
+                    android:text="Open Notification Settings"
+                    android:textSize="11sp"
+                    app:icon="@drawable/ic_bell"
+                    app:iconGravity="textStart"
+                    app:iconPadding="6dp" />
+
+                <!-- Method 2: Spotify Broadcast -->
+                <TextView
+                    android:id="@+id/method2Title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:text="Method 2: Spotify Broadcast"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/method2Desc"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Spotify Settings > Playback > Device Broadcast Status ON"
+                    android:textColor="#CCFFFFFF"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/btnOpenSpotify"
+                    android:layout_width="match_parent"
+                    android:layout_height="38dp"
+                    android:layout_marginTop="8dp"
+                    android:text="Open Spotify"
+                    android:textSize="11sp"
+                    app:icon="@drawable/ic_radio"
+                    app:iconGravity="textStart"
+                    app:iconPadding="6dp" />
+            </LinearLayout>
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

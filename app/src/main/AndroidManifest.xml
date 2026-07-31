@@ -43,6 +43,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".DebugLogActivity"
+            android:exported="false"
+            android:label="Debug Logs"
+            android:theme="@style/Theme.AdMuter" />
+
         <service
             android:name=".MuterService"
             android:exported="false"
