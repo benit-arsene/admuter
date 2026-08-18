@@ -8,14 +8,20 @@
     btnOpenSpotify) so MainActivity can drive it with identical logic.
     The original activity_main.xml is preserved untouched for safe rollback.
 -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/dark_background"
-    android:fillViewport="true"
-    android:fitsSystemWindows="true">
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -275,16 +281,19 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- Footer -->
-        <TextView
-            android:id="@+id/tvFooter"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center_horizontal"
-            android:layout_marginBottom="16dp"
-            android:text="Created by LODD YRB"
-            android:textColor="#808080"
-            android:textSize="12sp" />
-
     </LinearLayout>
-</ScrollView>
+    </ScrollView>
+
+    <!-- Footer (pinned to bottom) -->
+    <TextView
+        android:id="@+id/tvFooter"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingBottom="16dp"
+        android:paddingTop="8dp"
+        android:text="Created by LODD YRB"
+        android:textColor="#808080"
+        android:textSize="12sp" />
+
+</LinearLayout>
